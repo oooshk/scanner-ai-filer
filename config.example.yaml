@@ -1,0 +1,70 @@
+paths:
+  inbox: /home/pi/scanner/inbox
+  processing: /home/pi/scanner/processing
+  # Set review/archive/rejected to a NAS mount path if desired, or keep local:
+  review: /home/pi/scanner/review
+  archive: /home/pi/scanner/archive
+  rejected: /home/pi/scanner/rejected
+  state: /home/pi/scanner/state
+
+ocr:
+  enabled: true
+  command: ocrmypdf
+  language: eng
+  skip_text: true
+
+llm:
+  enabled: true
+  timeout_seconds: 240
+  max_input_chars: 2800
+  min_confidence_autofile: 0.60
+  # llama.cpp mode: keep {prompt} exactly as-is.
+  # Option A – Ollama (recommended, no JSON schema flag needed):
+  # command_template: ollama run qwen2.5:3b-instruct
+  #
+  # Option B – llama.cpp binary:
+  command_template: >-
+    /home/pi/llama.cpp/build/bin/llama-completion
+    -m /home/pi/models/Qwen2.5-1.5B-Instruct-Q4_K_M.gguf
+    -n 128
+    --temp 0
+    --ctx-size 2048
+    --json-schema '{"type":"object","required":["doc_type","vendor_or_sender","date","tags","confidence","reason"],"properties":{"doc_type":{"type":"string"},"vendor_or_sender":{"type":"string"},"date":{"type":"string"},"tags":{"type":"array","items":{"type":"string"}},"confidence":{"type":"number"},"reason":{"type":"string"}}}'
+    -p "{prompt}"
+
+splitter:
+  enabled: true
+  min_pages_to_split: 3
+  max_first_page_chars: 700
+  boundary_keywords:
+    - statement
+    - invoice
+    - receipt
+    - policy
+    - council tax
+    - pension
+    - account number
+    - patient
+
+rules:
+  allowed_doc_types:
+    - council_tax
+    - bank_statement
+    - pension
+    - utility_bill
+    - insurance
+    - tax
+    - medical
+    - payslip
+    - invoice
+    - receipt
+    - legal
+    - personal
+    - unknown
+  unknown_doc_type: unknown
+
+poll_seconds: 5
+inbox_settle_seconds: 90
+require_size_stability: true
+stable_cycles_required: 2
+log_level: INFO

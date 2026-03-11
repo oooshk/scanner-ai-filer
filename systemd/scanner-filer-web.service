@@ -1,0 +1,16 @@
+[Unit]
+Description=Scanner Filer Web UI
+After=network-online.target scanner-filer.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/scanner
+Environment=PYTHONPATH=/home/pi/scanner/src
+ExecStart=/home/pi/scanner/.venv/bin/python -m scanner_filer.web --config /home/pi/scanner/config.yaml --host 0.0.0.0 --port 8090
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

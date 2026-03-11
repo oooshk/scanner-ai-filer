@@ -1,0 +1,417 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Home Document Ops Hub</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <main class="layout">
+    <header class="hero">
+      <h1>Home Document Ops Hub</h1>
+      <p>Monitor queue activity, browse folders, and manage filing decisions across archive, review, and rejected.</p>
+    </header>
+
+    {% if msg %}
+      <div class="notice">{{ msg }}</div>
+    {% endif %}
+
+    <section class="controls">
+      <form method="get" action="/" class="search-form" id="search-form">
+        <input type="text" name="q" value="{{ q }}" placeholder="Search filename, sender, category, keywords (example: rob, dkms)">
+        <select name="bucket">
+          <option value="all" {% if bucket == 'all' %}selected{% endif %}>All</option>
+          <option value="archive" {% if bucket == 'archive' %}selected{% endif %}>Archive</option>
+          <option value="review" {% if bucket == 'review' %}selected{% endif %}>Review</option>
+          <option value="rejected" {% if bucket == 'rejected' %}selected{% endif %}>Rejected</option>
+        </select>
+        <select name="sort_by">
+          <option value="received" {% if sort_by == 'received' %}selected{% endif %}>Sort: Time Received</option>
+          <option value="processed" {% if sort_by == 'processed' %}selected{% endif %}>Sort: Last Processed</option>
+          <option value="location" {% if sort_by == 'location' %}selected{% endif %}>Sort: Folder Location</option>
+          <option value="type" {% if sort_by == 'type' %}selected{% endif %}>Sort: Category</option>
+          <option value="sender" {% if sort_by == 'sender' %}selected{% endif %}>Sort: Sender</option>
+          <option value="size" {% if sort_by == 'size' %}selected{% endif %}>Sort: Size</option>
+          <option value="name" {% if sort_by == 'name' %}selected{% endif %}>Sort: Filename</option>
+        </select>
+        <select name="sort_dir">
+          <option value="desc" {% if sort_dir == 'desc' %}selected{% endif %}>Newest / Z-A</option>
+          <option value="asc" {% if sort_dir == 'asc' %}selected{% endif %}>Oldest / A-Z</option>
+        </select>
+        <button type="submit">Search</button>
+      </form>
+      <button type="button" id="open-setup" class="setup-launch">Setup</button>
+    </section>
+
+    <div id="setup-modal" class="setup-modal" hidden>
+      <div class="setup-modal-backdrop" data-close-setup="1"></div>
+      <section class="setup-wrap setup-modal-panel">
+        <div class="setup-modal-head">
+          <h2>Setup</h2>
+          <button type="button" id="close-setup" class="setup-close">Close</button>
+        </div>
+        <p class="muted">Update NAS mount and scanner inbox Samba settings from the UI.</p>
+
+        <details class="setup-block" open>
+          <summary>NAS Samba Setup</summary>
+          <form method="post" action="/setup/nas" class="setup-form">
+            <input type="hidden" name="next" value="{{ return_query }}">
+            <input type="text" name="nas_host" value="{{ setup_defaults.nas_host }}" placeholder="NAS host/IP">
+            <input type="text" name="nas_share" value="{{ setup_defaults.nas_share }}" placeholder="Share name">
+            <input type="text" name="nas_user" value="{{ setup_defaults.nas_user }}" placeholder="SMB username">
+            <input type="password" name="nas_pass" placeholder="SMB password">
+            <input type="text" name="mount_point" value="{{ setup_defaults.mount_point }}" placeholder="Mount point">
+            <input type="text" name="subdir" value="{{ setup_defaults.subdir }}" placeholder="Subdirectory (e.g. Home Filing)">
+            <button type="submit">Apply NAS Setup</button>
+          </form>
+        </details>
+
+        <details class="setup-block">
+          <summary>Scanner Inbox Samba Setup</summary>
+          <form method="post" action="/setup/scanner-share" class="setup-form">
+            <input type="hidden" name="next" value="{{ return_query }}">
+            <input type="text" name="scanner_user" value="{{ setup_defaults.scanner_user }}" placeholder="Scanner Samba user">
+            <input type="password" name="scanner_pass" placeholder="Scanner Samba password">
+            <input type="text" name="scanner_share" value="{{ setup_defaults.scanner_share }}" placeholder="Share name">
+            <input type="text" name="inbox_dir" value="{{ setup_defaults.inbox }}" placeholder="Inbox path on Pi">
+            <button type="submit">Apply Scanner Share Setup</button>
+          </form>
+        </details>
+
+        <details class="setup-block">
+          <summary>Backup / Restore</summary>
+          <div class="setup-split">
+            <form method="post" action="/setup/backup/export" class="setup-form setup-form-compact">
+              <label class="checkline"><input type="checkbox" name="include_documents" checked> Include archive/review/rejected documents</label>
+              <button type="submit">Download Full Backup</button>
+            </form>
+
+            <form method="post" action="/setup/backup/restore" enctype="multipart/form-data" class="setup-form setup-form-compact">
+              <input type="hidden" name="next" value="{{ return_query }}">
+              <input type="file" name="backup_file" accept=".tar.gz,.tgz,application/gzip">
+              <button type="submit" class="danger">Restore Backup</button>
+            </form>
+          </div>
+          <p class="muted">Backup includes config, runtime state, setup scripts, source files, and optionally document folders. Restore merges files into the current system and may overwrite existing config/state files.</p>
+        </details>
+      </section>
+    </div>
+
+    <section class="queue-wrap">
+      <h2>Pending / Processing</h2>
+      <table class="queue-table" id="queue-table" {% if not queue_rows %}hidden{% endif %}>
+        <thead>
+          <tr>
+            <th>File</th>
+            <th>Location</th>
+            <th>Stage</th>
+            <th>Progress</th>
+            <th>Size</th>
+            <th>Modified</th>
+          </tr>
+        </thead>
+        <tbody id="queue-body">
+          {% for qd in queue_rows %}
+          <tr>
+            <td class="path">{{ qd.filename }}</td>
+            <td>{{ qd.location }}</td>
+            <td>{{ qd.stage }}</td>
+            <td>
+              <progress class="pbar" value="{{ qd.percent }}" max="100"></progress>
+              <small>{{ qd.percent }}%</small>
+            </td>
+            <td>{{ qd.size_kb }} KB</td>
+            <td>{{ qd.modified_iso }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      <p class="muted" id="queue-empty" {% if queue_rows %}hidden{% endif %}>No files are currently pending or processing.</p>
+    </section>
+
+    <section class="tree-wrap">
+      <h2>Directory Tree</h2>
+      <input type="text" id="tree-filter" class="tree-filter" placeholder="Filter tree folders/files (client-side)">
+      {% if tree_roots %}
+      {% macro render_nodes(nodes) %}
+        <ul class="tree-list">
+          {% for n in nodes %}
+          <li>
+            {% if n.is_file %}
+              <a class="tree-file" href="{{ url_for('open_document', bucket=n.bucket, rel_path=n.rel_path) }}" target="_blank" rel="noopener" title="{{ n.rel_path }}">{{ n.name }}</a>
+            {% else %}
+              <details class="tree-node" {% if n.rel_path == '' %}open{% endif %}>
+                <summary>{{ n.name }}</summary>
+                {% if n.children %}
+                  {{ render_nodes(n.children) }}
+                {% else %}
+                  <div class="muted">empty</div>
+                {% endif %}
+              </details>
+            {% endif %}
+          </li>
+          {% endfor %}
+        </ul>
+      {% endmacro %}
+      {{ render_nodes(tree_roots) }}
+      {% else %}
+      <p class="muted">No files match your current filter.</p>
+      {% endif %}
+    </section>
+
+    <section class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Status</th>
+            <th>File</th>
+            <th>Type</th>
+            <th>Scanned</th>
+            <th>Modified</th>
+            <th>Folder</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for d in documents %}
+          <tr class="doc-row" data-row-id="{{ loop.index0 }}" onclick="toggleRowById(event, '{{ loop.index0 }}')" role="button" tabindex="0" onkeydown="toggleRowByKey(event, '{{ loop.index0 }}')">
+            <td><span class="chip chip-{{ d.bucket }}">{{ d.bucket }}</span></td>
+            <td class="path"><a href="{{ url_for('open_document', bucket=d.bucket, rel_path=d.rel_path) }}" target="_blank" rel="noopener" title="{{ d.rel_path }}">{{ d.filename }}</a></td>
+            <td>{{ d.doc_type }}</td>
+            <td>{{ d.scanned_iso }}</td>
+            <td>{{ d.modified_iso }}</td>
+            <td class="path" title="{{ d.rel_path }}">{{ d.rel_path }}</td>
+          </tr>
+          <tr class="doc-detail-row" id="detail-{{ loop.index0 }}" hidden>
+            <td colspan="6">
+              <div class="detail-grid">
+                <div><strong>Sender:</strong> {{ d.sender or 'unknown' }}</div>
+                <div><strong>Year:</strong> {{ d.year or '-' }}</div>
+                <div><strong>Size:</strong> {{ (d.size_bytes / 1024)|round(1) }} KB</div>
+                <div><strong>Suggested:</strong> {{ d.suggested_type or '-' }}</div>
+              </div>
+              <div class="detail-long"><strong>Full path:</strong> {{ d.rel_path }}</div>
+              <div class="detail-long"><strong>Keywords:</strong> {{ d.keywords|join(', ') if d.keywords else '-' }}</div>
+
+              <form method="post" action="/keywords" class="keyword-form">
+                <input type="hidden" name="src_bucket" value="{{ d.bucket }}">
+                <input type="hidden" name="rel_path" value="{{ d.rel_path }}">
+                <input type="hidden" name="next" value="{{ return_query }}">
+                <input type="text" name="keywords" value="{{ d.keywords|join(', ') }}" placeholder="comma-separated keywords">
+                <button type="submit">Save Keywords</button>
+              </form>
+
+              <form method="post" action="/move" class="move-form">
+                <input type="hidden" name="src_bucket" value="{{ d.bucket }}">
+                <input type="hidden" name="rel_path" value="{{ d.rel_path }}">
+                <input type="hidden" name="next" value="{{ return_query }}">
+
+                <select name="target_bucket">
+                  <option value="archive">archive</option>
+                  <option value="review">review</option>
+                  <option value="rejected">rejected</option>
+                </select>
+
+                <select name="target_type">
+                  {% for t in allowed_types %}
+                  <option value="{{ t }}" {% if d.target_default_type == t %}selected{% endif %}>{{ t }}</option>
+                  {% endfor %}
+                </select>
+
+                <input type="text" name="target_year" value="{{ d.year or '2026' }}" placeholder="year">
+                <input type="text" name="target_sender" value="{{ d.sender or 'unknown' }}" placeholder="sender">
+                <button type="submit">Move</button>
+              </form>
+
+              <form method="post" action="/add-category" class="inline-category-form">
+                <input type="hidden" name="next" value="{{ return_query }}">
+                <input type="text" name="new_category" placeholder="new category for this item">
+                <button type="submit">Add Category</button>
+              </form>
+
+              <div class="detail-actions">
+                <form method="post" action="/split-manual" class="split-manual-form">
+                  <input type="hidden" name="src_bucket" value="{{ d.bucket }}">
+                  <input type="hidden" name="rel_path" value="{{ d.rel_path }}">
+                  <input type="hidden" name="next" value="{{ return_query }}">
+                  <input type="text" name="split_pages" placeholder="1,4,5" title="Start pages, 1-based">
+                  <button type="submit">Split @ pages + Reprocess</button>
+                </form>
+                <form method="post" action="/delete" class="delete-form" onsubmit="return confirm('Delete this file permanently? {{ d.rel_path }}');">
+                  <input type="hidden" name="src_bucket" value="{{ d.bucket }}">
+                  <input type="hidden" name="rel_path" value="{{ d.rel_path }}">
+                  <input type="hidden" name="next" value="{{ return_query }}">
+                  <button type="submit" class="danger">Delete</button>
+                </form>
+              </div>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </section>
+  </main>
+
+  <script>
+    let autoRefreshTimer = null;
+
+    function hasExpandedRows() {
+      return Array.from(document.querySelectorAll('.doc-detail-row')).some((row) => !row.hidden);
+    }
+
+    function userIsEditing() {
+      const active = document.activeElement;
+      if (!active) return false;
+      return ['INPUT', 'SELECT', 'TEXTAREA'].includes(active.tagName);
+    }
+
+    function queueRowHtml(row) {
+      return `<tr>
+        <td class="path">${escapeHtml(row.filename)}</td>
+        <td>${escapeHtml(row.location)}</td>
+        <td>${escapeHtml(row.stage)}</td>
+        <td><progress class="pbar" value="${Number(row.percent) || 0}" max="100"></progress> <small>${Number(row.percent) || 0}%</small></td>
+        <td>${Number(row.size_kb || 0).toFixed(1)} KB</td>
+        <td>${escapeHtml(row.modified_iso)}</td>
+      </tr>`;
+    }
+
+    function escapeHtml(s) {
+      return String(s || '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&#39;');
+    }
+
+    async function refreshQueueOnly() {
+      try {
+        const resp = await fetch('/api/queue', { cache: 'no-store' });
+        if (!resp.ok) return;
+        const data = await resp.json();
+        const rows = Array.isArray(data.rows) ? data.rows : [];
+        const body = document.getElementById('queue-body');
+        const table = document.getElementById('queue-table');
+        const empty = document.getElementById('queue-empty');
+        if (!body || !table || !empty) return;
+        if (rows.length === 0) {
+          body.innerHTML = '';
+          table.hidden = true;
+          empty.hidden = false;
+          return;
+        }
+        body.innerHTML = rows.map(queueRowHtml).join('');
+        table.hidden = false;
+        empty.hidden = true;
+      } catch (_err) {
+      }
+    }
+
+    function scheduleAutoRefresh() {
+      if (autoRefreshTimer) {
+        clearInterval(autoRefreshTimer);
+        autoRefreshTimer = null;
+      }
+      autoRefreshTimer = setInterval(() => {
+        if (userIsEditing()) {
+          return;
+        }
+        refreshQueueOnly();
+      }, 5000);
+    }
+
+    scheduleAutoRefresh();
+    refreshQueueOnly();
+
+    const searchForm = document.getElementById('search-form');
+    const sortBySelect = searchForm ? searchForm.querySelector('select[name="sort_by"]') : null;
+    const sortDirSelect = searchForm ? searchForm.querySelector('select[name="sort_dir"]') : null;
+    const bucketSelect = searchForm ? searchForm.querySelector('select[name="bucket"]') : null;
+    [sortBySelect, sortDirSelect, bucketSelect].forEach((el) => {
+      if (!el || !searchForm) return;
+      el.addEventListener('change', () => searchForm.submit());
+    });
+
+    function toggleRowById(_event, id) {
+      const detail = document.getElementById('detail-' + id);
+      if (!detail) return;
+      detail.hidden = !detail.hidden;
+    }
+
+    function toggleRowByKey(event, id) {
+      if (event.key !== 'Enter' && event.key !== ' ') return;
+      event.preventDefault();
+      toggleRowById(event, id);
+    }
+
+    document.querySelectorAll('.doc-row a, .doc-row button, .doc-row input, .doc-row select, .doc-row textarea, .doc-row label').forEach((el) => {
+      el.addEventListener('click', (ev) => ev.stopPropagation());
+    });
+
+    document.querySelectorAll('.doc-detail-row a, .doc-detail-row button, .doc-detail-row input, .doc-detail-row select, .doc-detail-row textarea, .doc-detail-row label').forEach((el) => {
+      el.addEventListener('click', (ev) => ev.stopPropagation());
+    });
+
+    const treeFilter = document.getElementById('tree-filter');
+
+    function applyTreeFilter() {
+      if (!treeFilter) return;
+      const q = treeFilter.value.trim().toLowerCase();
+      const treeRoot = document.querySelector('.tree-wrap');
+      if (!treeRoot) return;
+
+      const allLists = Array.from(treeRoot.querySelectorAll('.tree-list')).reverse();
+      allLists.forEach((ul) => {
+        const items = ul.querySelectorAll(':scope > li');
+        items.forEach((li) => {
+          const fileLink = li.querySelector(':scope > .tree-file');
+          const details = li.querySelector(':scope > .tree-node');
+
+          if (fileLink) {
+            const txt = (fileLink.textContent || '').toLowerCase();
+            li.hidden = !(q === '' || txt.includes(q));
+            return;
+          }
+
+          if (!details) return;
+          const summary = details.querySelector(':scope > summary');
+          const ownTxt = (summary ? summary.textContent : '').toLowerCase();
+          const visibleChildren = details.querySelectorAll(':scope > .tree-list > li:not([hidden])').length;
+          const ownMatch = q === '' || ownTxt.includes(q);
+          const show = ownMatch || visibleChildren > 0;
+          li.hidden = !show;
+          if (q) {
+            details.open = show;
+          }
+        });
+      });
+    }
+
+    if (treeFilter) {
+      treeFilter.addEventListener('input', applyTreeFilter);
+    }
+
+    const setupModal = document.getElementById('setup-modal');
+    const openSetupBtn = document.getElementById('open-setup');
+    const closeSetupBtn = document.getElementById('close-setup');
+
+    function setSetupOpen(open) {
+      if (!setupModal) return;
+      setupModal.hidden = !open;
+      document.body.classList.toggle('no-scroll', open);
+    }
+
+    if (openSetupBtn) {
+      openSetupBtn.addEventListener('click', () => setSetupOpen(true));
+    }
+    if (closeSetupBtn) {
+      closeSetupBtn.addEventListener('click', () => setSetupOpen(false));
+    }
+    if (setupModal) {
+      setupModal.querySelectorAll('[data-close-setup="1"]').forEach((el) => {
+        el.addEventListener('click', () => setSetupOpen(false));
+      });
+      document.addEventListener('keydown', (ev) => {
+        if (ev.key === 'Escape') setSetupOpen(false);
+      });
+    }
+
+  </script>
+</body>
+</html>

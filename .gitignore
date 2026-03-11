@@ -1,0 +1,53 @@
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# ── Virtual environment ────────────────────────────────────────────────────────
+.venv/
+venv/
+env/
+ENV/
+
+# ── Runtime / data directories ────────────────────────────────────────────────
+# These are created by install.sh and hold real documents / state.
+# Do NOT commit real scans, personal documents, or live state.
+inbox/
+processing/
+archive/
+review/
+rejected/
+state/
+
+# ── Live config (may contain secrets / local paths) ──────────────────────────
+config.yaml
+
+# ── Credential / secret files ─────────────────────────────────────────────────
+.smb-*
+*.cred
+.env
+
+# ── Backup archives produced by the web UI ───────────────────────────────────
+scanner-backup-*.tar.gz
+
+# ── Editor / OS clutter ───────────────────────────────────────────────────────
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+Thumbs.db
+
+# ── pytest / coverage / mypy cache ───────────────────────────────────────────
+.pytest_cache/
+.mypy_cache/
+htmlcov/
+.coverage
+coverage.xml
