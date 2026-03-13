@@ -430,7 +430,7 @@
         </thead>
         <tbody>
           {% for d in documents %}
-          <tr class="doc-row {% if d.auto_filed_recent %}doc-row-autofile{% endif %}" data-row-id="{{ loop.index0 }}" onclick="toggleRowById(event, '{{ loop.index0 }}')" role="button" tabindex="0" onkeydown="toggleRowByKey(event, '{{ loop.index0 }}')">
+          <tr class="doc-row {% if d.auto_filed_recent %}doc-row-autofile{% endif %}" data-row-id="{{ loop.index0 }}" data-rel-path="{{ d.rel_path }}" onclick="toggleRowById(event, '{{ loop.index0 }}')" role="button" tabindex="0" onkeydown="toggleRowByKey(event, '{{ loop.index0 }}')">
             <td>
               <input type="checkbox" class="doc-select" data-inbox-user="{{ d.inbox_user }}" name="selected" value="{{ d.bucket }}|{{ d.rel_path }}">
             </td>
@@ -528,6 +528,44 @@
 
   <script>
     let autoRefreshTimer = null;
+    const docsUiStateKey = 'docs_ui_state_v1';
+
+    function loadDocsUiState() {
+      try {
+        const raw = sessionStorage.getItem(docsUiStateKey);
+        if (!raw) return {};
+        const parsed = JSON.parse(raw);
+        return parsed && typeof parsed === 'object' ? parsed : {};
+      } catch (_err) {
+        return {};
+      }
+    }
+
+    function collectExpandedRelPaths() {
+      const out = [];
+      document.querySelectorAll('.doc-row').forEach((row) => {
+        const id = row.dataset.rowId;
+        const rel = row.dataset.relPath || '';
+        if (!id || !rel) return;
+        const detail = document.getElementById('detail-' + id);
+        if (detail && !detail.hidden) {
+          out.push(rel);
+        }
+      });
+      return out;
+    }
+
+    function saveDocsUiState() {
+      const tableWrap = document.getElementById('documents-table-wrap');
+      const payload = {
+        filesListOpen: !!(tableWrap && !tableWrap.hidden),
+        expandedRelPaths: collectExpandedRelPaths(),
+      };
+      try {
+        sessionStorage.setItem(docsUiStateKey, JSON.stringify(payload));
+      } catch (_err) {
+      }
+    }
 
     function hasExpandedRows() {
       return Array.from(document.querySelectorAll('.doc-detail-row')).some((row) => !row.hidden);
@@ -603,7 +641,14 @@
       if (!searchForm || !sortByHidden || !sortDirHidden || !docsSortBy || !docsSortDir) return;
       sortByHidden.value = docsSortBy.value;
       sortDirHidden.value = docsSortDir.value;
+      saveDocsUiState();
       searchForm.submit();
+    }
+
+    if (searchForm) {
+      searchForm.addEventListener('submit', () => {
+        saveDocsUiState();
+      });
     }
 
     if (docsSortBy) {
@@ -617,6 +662,7 @@
       const detail = document.getElementById('detail-' + id);
       if (!detail) return;
       detail.hidden = !detail.hidden;
+      saveDocsUiState();
     }
 
     function toggleRowByKey(event, id) {
@@ -729,30 +775,56 @@
     }
 
     if (docsExpandAllBtn) {
-      docsExpandAllBtn.addEventListener('click', () => setAllDocRows(true));
+      docsExpandAllBtn.addEventListener('click', () => {
+        setAllDocRows(true);
+        saveDocsUiState();
+      });
     }
     if (docsCollapseAllBtn) {
-      docsCollapseAllBtn.addEventListener('click', () => setAllDocRows(false));
+      docsCollapseAllBtn.addEventListener('click', () => {
+        setAllDocRows(false);
+        saveDocsUiState();
+      });
     }
 
     if (filesExpandBtn && documentsTableWrap) {
       filesExpandBtn.addEventListener('click', () => {
         documentsTableWrap.hidden = false;
+        saveDocsUiState();
       });
     }
 
     if (filesCollapseBtn && documentsTableWrap) {
       filesCollapseBtn.addEventListener('click', () => {
         documentsTableWrap.hidden = true;
+        saveDocsUiState();
       });
     }
 
+    const docsUiState = loadDocsUiState();
     if (documentsTableWrap) {
-      documentsTableWrap.hidden = true;
+      if (typeof docsUiState.filesListOpen === 'boolean') {
+        documentsTableWrap.hidden = !docsUiState.filesListOpen;
+      } else {
+        documentsTableWrap.hidden = true;
+      }
     }
 
-    // Ensure document details always start collapsed on page load.
-    setAllDocRows(false);
+    if (Array.isArray(docsUiState.expandedRelPaths) && docsUiState.expandedRelPaths.length > 0) {
+      const wanted = new Set(docsUiState.expandedRelPaths.map((x) => String(x)));
+      document.querySelectorAll('.doc-row').forEach((row) => {
+        const id = row.dataset.rowId;
+        const rel = row.dataset.relPath || '';
+        if (!id || !rel || !wanted.has(rel)) return;
+        const detail = document.getElementById('detail-' + id);
+        if (detail) {
+          detail.hidden = false;
+        }
+      });
+    } else {
+      // First load default: details collapsed.
+      setAllDocRows(false);
+    }
 
     const treeFilter = document.getElementById('tree-filter');
     const treeExpandAllBtn = document.getElementById('tree-expand-all');
