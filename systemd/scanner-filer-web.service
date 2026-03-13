@@ -8,6 +8,12 @@ Type=simple
 User=pi
 WorkingDirectory=/home/pi/scanner
 Environment=PYTHONPATH=/home/pi/scanner/src
+Environment=SCANNER_WEB_USER=admin
+Environment=SCANNER_WEB_PASSWORD=
+Environment=SCANNER_WEB_ENABLE_SETUP=true
+Environment=SCANNER_WEB_SECURE_COOKIE=false
+Environment=SCANNER_WEB_ALLOWED_NETS=127.0.0.1/32,192.168.1.0/24
+Environment=SCANNER_WEB_DISABLE_AUTH=false
 ExecStart=/home/pi/scanner/.venv/bin/python -m scanner_filer.web --config /home/pi/scanner/config.yaml --host 0.0.0.0 --port 8090
 Restart=always
 RestartSec=3

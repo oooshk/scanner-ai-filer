@@ -69,6 +69,27 @@ def _keyword_fallback(text: str, rules_cfg: RulesConfig) -> ClassificationResult
     )
 
 
+def _apply_rule_overrides(text: str, result: ClassificationResult, rules_cfg: RulesConfig) -> ClassificationResult:
+    low = text.lower()
+
+    # Positive override: force target category when phrase matches.
+    for phrase, forced_type in rules_cfg.keyword_overrides.items():
+        if phrase and phrase in low and forced_type in rules_cfg.allowed_doc_types:
+            result.doc_type = forced_type
+            result.confidence = max(result.confidence, 0.95)
+            result.reason = f"keyword_override:{phrase}"
+            break
+
+    # Negative guard: downgrade risky misclassifications for review.
+    blocked_terms = rules_cfg.negative_type_keywords.get(result.doc_type, [])
+    if blocked_terms and any(term in low for term in blocked_terms):
+        result.doc_type = rules_cfg.unknown_doc_type
+        result.confidence = min(result.confidence, 0.35)
+        result.reason = "negative_type_guard"
+
+    return result
+
+
 def classify_text(text: str, llm_cfg: LLMConfig, rules_cfg: RulesConfig) -> ClassificationResult:
     if not text.strip():
         return ClassificationResult(
@@ -81,14 +102,18 @@ def classify_text(text: str, llm_cfg: LLMConfig, rules_cfg: RulesConfig) -> Clas
         )
 
     if not llm_cfg.enabled:
-        return _keyword_fallback(text, rules_cfg)
+        return _apply_rule_overrides(text, _keyword_fallback(text, rules_cfg), rules_cfg)
+
+    extra_guidance = llm_cfg.classification_guidance.strip()
+    guidance_block = f"\nAdditional classification guidance:\n{extra_guidance}\n" if extra_guidance else ""
 
     prompt = (
         "You are a strict document classifier. Return JSON only with keys: "
         "doc_type, vendor_or_sender, date, tags, confidence, reason. "
         f"doc_type must be one of: {', '.join(rules_cfg.allowed_doc_types)}. "
         "date must be YYYY-MM-DD or empty string. confidence is 0..1. "
-        "Do not include markdown.\n\n"
+        "Do not include markdown.\n"
+        f"{guidance_block}\n"
         f"Document text:\n{text[:llm_cfg.max_input_chars]}"
     )
 
@@ -121,16 +146,16 @@ def classify_text(text: str, llm_cfg: LLMConfig, rules_cfg: RulesConfig) -> Clas
             )
     except subprocess.TimeoutExpired:
         logger.warning("LLM classifier timeout; using fallback")
-        return _keyword_fallback(text, rules_cfg)
+        return _apply_rule_overrides(text, _keyword_fallback(text, rules_cfg), rules_cfg)
 
     if completed.returncode != 0:
         logger.warning("LLM classifier failed: %s", completed.stderr.strip())
-        return _keyword_fallback(text, rules_cfg)
+        return _apply_rule_overrides(text, _keyword_fallback(text, rules_cfg), rules_cfg)
 
     json_block = _sanitize_json_block(completed.stdout)
     if not json_block:
         logger.warning("LLM output had no JSON; using fallback")
-        return _keyword_fallback(text, rules_cfg)
+        return _apply_rule_overrides(text, _keyword_fallback(text, rules_cfg), rules_cfg)
 
     try:
         data = json.loads(json_block)
@@ -145,7 +170,7 @@ def classify_text(text: str, llm_cfg: LLMConfig, rules_cfg: RulesConfig) -> Clas
         if not isinstance(tags, list):
             tags = []
 
-        return ClassificationResult(
+        out = ClassificationResult(
             doc_type=doc_type,
             vendor_or_sender=str(data.get("vendor_or_sender", "unknown")).strip() or "unknown",
             date=str(data.get("date", "")).strip(),
@@ -153,6 +178,7 @@ def classify_text(text: str, llm_cfg: LLMConfig, rules_cfg: RulesConfig) -> Clas
             confidence=confidence,
             reason=str(data.get("reason", "llm")).strip() or "llm",
         )
+        return _apply_rule_overrides(text, out, rules_cfg)
     except Exception:
         logger.warning("LLM JSON parsing failed; using fallback")
-        return _keyword_fallback(text, rules_cfg)
+        return _apply_rule_overrides(text, _keyword_fallback(text, rules_cfg), rules_cfg)

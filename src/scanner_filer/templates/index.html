@@ -9,8 +9,21 @@
 <body>
   <main class="layout">
     <header class="hero">
-      <h1>Home Document Ops Hub</h1>
-      <p>Monitor queue activity, browse folders, and manage filing decisions across archive, review, and rejected.</p>
+      <div class="hero-top">
+        <div>
+          <h1>Home Document Ops Hub</h1>
+          <p>Monitor queue activity, browse folders, and manage filing decisions across archive, review, and rejected.</p>
+        </div>
+        <div class="hero-actions">
+          <form method="post" action="/logout" class="inline-category-form">
+            <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+            <button type="submit">Log Out</button>
+          </form>
+          {% if setup_enabled %}
+          <button type="button" id="open-setup" class="setup-launch">Setup</button>
+          {% endif %}
+        </div>
+      </div>
     </header>
 
     {% if msg %}
@@ -41,9 +54,9 @@
         </select>
         <button type="submit">Search</button>
       </form>
-      <button type="button" id="open-setup" class="setup-launch">Setup</button>
     </section>
 
+    {% if setup_enabled %}
     <div id="setup-modal" class="setup-modal" hidden>
       <div class="setup-modal-backdrop" data-close-setup="1"></div>
       <section class="setup-wrap setup-modal-panel">
@@ -51,43 +64,206 @@
           <h2>Setup</h2>
           <button type="button" id="close-setup" class="setup-close">Close</button>
         </div>
-        <p class="muted">Update NAS mount and scanner inbox Samba settings from the UI.</p>
+        <p class="muted">Use these sections to configure: 1) NAS destination storage, 2) Pi scanner upload shares, 3) user accounts, and 4) AI filing behavior.</p>
 
         <details class="setup-block" open>
           <summary>NAS Samba Setup</summary>
+          <p class="muted">This connects the Pi to your NAS. The NAS Share Name is the remote shared folder on the NAS (often "Public"). The Subdirectory is your filing folder inside that share (for example "Home Filing").</p>
           <form method="post" action="/setup/nas" class="setup-form">
+            <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
             <input type="hidden" name="next" value="{{ return_query }}">
-            <input type="text" name="nas_host" value="{{ setup_defaults.nas_host }}" placeholder="NAS host/IP">
-            <input type="text" name="nas_share" value="{{ setup_defaults.nas_share }}" placeholder="Share name">
-            <input type="text" name="nas_user" value="{{ setup_defaults.nas_user }}" placeholder="SMB username">
-            <input type="password" name="nas_pass" placeholder="SMB password">
-            <input type="text" name="mount_point" value="{{ setup_defaults.mount_point }}" placeholder="Mount point">
-            <input type="text" name="subdir" value="{{ setup_defaults.subdir }}" placeholder="Subdirectory (e.g. Home Filing)">
+            <input type="text" name="nas_host" value="{{ setup_defaults.nas_host }}" placeholder="NAS host/IP (example: 192.168.1.10)">
+            <input type="text" name="nas_share" value="{{ setup_defaults.nas_share }}" placeholder="NAS share name on NAS (example: Public)">
+            <input type="text" name="nas_user" value="{{ setup_defaults.nas_user }}" placeholder="NAS login username">
+            <input type="password" name="nas_pass" placeholder="NAS login password">
+            <input type="text" name="mount_point" value="{{ setup_defaults.mount_point }}" placeholder="Mount path on Pi (example: /mnt/nas)">
+            <input type="text" name="subdir" value="{{ setup_defaults.subdir }}" placeholder="Folder inside NAS share for filing (example: Home Filing)">
             <button type="submit">Apply NAS Setup</button>
           </form>
         </details>
 
         <details class="setup-block">
           <summary>Scanner Inbox Samba Setup</summary>
+          <p class="muted">This creates a Samba upload share on the Pi itself for scanners. It is separate from NAS login. Use this if you want one general scanner share.</p>
           <form method="post" action="/setup/scanner-share" class="setup-form">
+            <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
             <input type="hidden" name="next" value="{{ return_query }}">
-            <input type="text" name="scanner_user" value="{{ setup_defaults.scanner_user }}" placeholder="Scanner Samba user">
-            <input type="password" name="scanner_pass" placeholder="Scanner Samba password">
-            <input type="text" name="scanner_share" value="{{ setup_defaults.scanner_share }}" placeholder="Share name">
-            <input type="text" name="inbox_dir" value="{{ setup_defaults.inbox }}" placeholder="Inbox path on Pi">
+            <input type="text" name="scanner_user" value="{{ setup_defaults.scanner_user }}" placeholder="Pi Samba username for scanner uploads">
+            <input type="password" name="scanner_pass" placeholder="Pi Samba password for scanner uploads">
+            <input type="text" name="scanner_share" value="{{ setup_defaults.scanner_share }}" placeholder="Share name on Pi (example: scanner_inbox)">
+            <input type="text" name="inbox_dir" value="{{ setup_defaults.inbox }}" placeholder="Local inbox folder on Pi (example: /home/pi/scanner/inbox)">
             <button type="submit">Apply Scanner Share Setup</button>
           </form>
+        </details>
+
+        <details class="setup-block">
+          <summary>User Inboxes</summary>
+          <p class="muted">Create one scanner inbox per person. Each person can have their own NAS login and own destination filing root.</p>
+          <p class="muted">Field guide: NAS Share Name is the remote NAS share (often "Public"). Subdirectory is the folder inside that share (for example "Home Filing"). Apply User Inboxes below creates Samba shares on the Pi for scanner uploads.</p>
+          <p class="muted">Important: the Samba username for each Pi scanner share is the inbox name (for example Rob -> scanner_Rob with username Rob). The Samba password here is for those Pi shares and is separate from web login account passwords.</p>
+          <div id="user-inboxes-list">
+            <p>Loading inboxes...</p>
+          </div>
+          <div class="setup-form setup-form-compact">
+            <h4>Add New User Inbox</h4>
+            <form method="post" action="/setup/user-inbox/add" class="setup-form">
+              <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+              <input type="hidden" name="next" value="{{ return_query }}">
+              <input type="text" name="name" placeholder="Username (e.g., rob, john)" pattern="[A-Za-z0-9._-]{3,64}" title="3-64 chars, letters/numbers/._-">
+              <input type="text" name="nas_host" value="{{ setup_defaults.nas_host }}" placeholder="NAS host/IP (example: 192.168.1.10)">
+              <input type="text" name="nas_share" value="{{ setup_defaults.nas_share }}" placeholder="NAS share name on NAS (often Public)">
+              <input type="text" name="nas_user" placeholder="NAS username for this person">
+              <input type="password" name="nas_pass" placeholder="NAS password for this person">
+              <input type="text" name="nas_subdir" value="Home Filing" placeholder="Folder inside NAS share (example: Home Filing)">
+              <button type="submit">Add Inbox</button>
+            </form>
+          </div>
+          <div class="setup-form setup-form-compact" style="margin-top: 1rem;">
+            <h4>Edit Existing User Inbox</h4>
+            <form method="post" action="/setup/user-inbox/update" class="setup-form" id="user-inbox-edit-form">
+              <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+              <input type="hidden" name="next" value="{{ return_query }}">
+              <select name="current_name" id="edit-current-name">
+                <option value="">Select existing user inbox</option>
+              </select>
+              <input type="text" name="name" id="edit-name" placeholder="Updated username">
+              <input type="text" name="samba_share" id="edit-samba-share" placeholder="Pi share name (example: scanner_rob)">
+              <input type="text" name="nas_host" id="edit-nas-host" placeholder="NAS host/IP">
+              <input type="text" name="nas_share" id="edit-nas-share" placeholder="NAS share name (often Public)">
+              <input type="text" name="nas_user" id="edit-nas-user" placeholder="NAS username">
+              <input type="password" name="nas_pass" id="edit-nas-pass" placeholder="NAS password (required only if NAS details changed)">
+              <input type="text" name="nas_subdir" id="edit-nas-subdir" placeholder="Folder inside NAS share (example: Home Filing)">
+              <label class="checkline"><input type="checkbox" name="enabled" id="edit-enabled" checked> Enabled</label>
+              <button type="submit">Save User Inbox Changes</button>
+            </form>
+          </div>
+          <div class="setup-form setup-form-compact" style="margin-top: 1rem;">
+            <h4>Apply Pi Scanner Shares</h4>
+            <form method="post" action="/setup/user-inbox/apply" class="setup-form">
+              <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+              <input type="hidden" name="next" value="{{ return_query }}">
+              <input type="password" name="samba_password" placeholder="Password for Pi Samba user shares (scanner_rob, scanner_jane, etc.)">
+              <button type="submit">Create/Update Pi Scanner Shares</button>
+            </form>
+          </div>
+          <script>
+            let userInboxCache = {};
+
+            function loadUserInboxes() {
+              fetch('/api/user-inboxes')
+                .then(r => r.json())
+                .then(data => {
+                  const list = document.getElementById('user-inboxes-list');
+                  const inboxes = data.inboxes || {};
+                  userInboxCache = inboxes;
+                  if (Object.keys(inboxes).length === 0) {
+                    list.innerHTML = '<p class="muted">No user inboxes configured yet.</p>';
+                    const select = document.getElementById('edit-current-name');
+                    if (select) {
+                      select.innerHTML = '<option value="">Select existing user inbox</option>';
+                    }
+                    return;
+                  }
+                  let html = '<table style="width:100%; margin-bottom:1rem;"><thead><tr><th>Username</th><th>Samba Share</th><th>NAS Login</th><th>Archive Path</th><th>Action</th></tr></thead><tbody>';
+                  for (const [name, config] of Object.entries(inboxes)) {
+                    const nasLogin = `${config.nas_user || 'N/A'} @ ${config.nas_host || 'N/A'}`;
+                    html += `<tr><td>${name}</td><td>${config.samba_share || 'N/A'}</td><td>${nasLogin}</td><td>${config.archive_path || 'N/A'}</td>`;
+                    html += `<td><form method="post" action="/setup/user-inbox/delete" style="display:inline;"><input type="hidden" name="_csrf" value="{{ csrf_token() }}"><input type="hidden" name="next" value="{{ return_query }}"><input type="hidden" name="name" value="${name}"><button type="submit" class="danger" style="padding:0.25rem 0.5rem; font-size:0.9rem;">Delete</button></form></td></tr>`;
+                  }
+                  html += '</tbody></table>';
+                  list.innerHTML = html;
+
+                  const select = document.getElementById('edit-current-name');
+                  if (select) {
+                    select.innerHTML = '<option value="">Select existing user inbox</option>';
+                    Object.keys(inboxes).sort().forEach((name) => {
+                      const opt = document.createElement('option');
+                      opt.value = name;
+                      opt.textContent = name;
+                      select.appendChild(opt);
+                    });
+                  }
+                })
+                .catch(err => {
+                  document.getElementById('user-inboxes-list').innerHTML = '<p class="error">Failed to load inboxes: ' + err.message + '</p>';
+                });
+            }
+
+            function fillUserInboxEditForm(name) {
+              const cfg = userInboxCache[name] || {};
+              const setVal = (id, value) => {
+                const el = document.getElementById(id);
+                if (el) {
+                  el.value = value || '';
+                }
+              };
+              setVal('edit-name', name || '');
+              setVal('edit-samba-share', cfg.samba_share || '');
+              setVal('edit-nas-host', cfg.nas_host || '');
+              setVal('edit-nas-share', cfg.nas_share || '');
+              setVal('edit-nas-user', cfg.nas_user || '');
+              setVal('edit-nas-subdir', cfg.nas_subdir || '');
+              const enabled = document.getElementById('edit-enabled');
+              if (enabled) {
+                enabled.checked = cfg.enabled !== false;
+              }
+              const pass = document.getElementById('edit-nas-pass');
+              if (pass) {
+                pass.value = '';
+              }
+            }
+
+            function loadSecurityAccounts() {
+              fetch('/api/security-accounts')
+                .then(r => r.json())
+                .then(data => {
+                  const panel = document.getElementById('security-accounts-list');
+                  if (!panel) {
+                    return;
+                  }
+                  const accounts = data.accounts || [];
+                  if (!accounts.length) {
+                    panel.innerHTML = '<p class="muted">No login accounts found.</p>';
+                    return;
+                  }
+                  let html = '<ul class="tree-list">';
+                  for (const account of accounts) {
+                    html += `<li><strong>${account.username}</strong></li>`;
+                  }
+                  html += '</ul>';
+                  panel.innerHTML = html;
+                })
+                .catch(() => {
+                  const panel = document.getElementById('security-accounts-list');
+                  if (panel) {
+                    panel.innerHTML = '<p class="muted">Unable to load login accounts.</p>';
+                  }
+                });
+            }
+
+            loadUserInboxes();
+            window.addEventListener('load', loadSecurityAccounts);
+            window.addEventListener('load', () => {
+              const select = document.getElementById('edit-current-name');
+              if (!select) {
+                return;
+              }
+              select.addEventListener('change', () => fillUserInboxEditForm(select.value));
+            });
+          </script>
         </details>
 
         <details class="setup-block">
           <summary>Backup / Restore</summary>
           <div class="setup-split">
             <form method="post" action="/setup/backup/export" class="setup-form setup-form-compact">
+              <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
               <label class="checkline"><input type="checkbox" name="include_documents" checked> Include archive/review/rejected documents</label>
               <button type="submit">Download Full Backup</button>
             </form>
 
             <form method="post" action="/setup/backup/restore" enctype="multipart/form-data" class="setup-form setup-form-compact">
+              <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
               <input type="hidden" name="next" value="{{ return_query }}">
               <input type="file" name="backup_file" accept=".tar.gz,.tgz,application/gzip">
               <button type="submit" class="danger">Restore Backup</button>
@@ -95,8 +271,52 @@
           </div>
           <p class="muted">Backup includes config, runtime state, setup scripts, source files, and optionally document folders. Restore merges files into the current system and may overwrite existing config/state files.</p>
         </details>
+
+        <details class="setup-block">
+          <summary>Security Login Accounts</summary>
+          <p class="muted">Manage all usernames that can sign in to this web app. Add a new account or reset an existing account password.</p>
+          <div id="security-accounts-list">
+            <p>Loading login accounts...</p>
+          </div>
+          <form method="post" action="/setup/security" class="setup-form">
+            <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+            <input type="hidden" name="next" value="{{ return_query }}">
+            <input type="text" name="security_user" value="{{ setup_defaults.security_user }}" placeholder="Username to add/update">
+            <input type="password" name="security_password" placeholder="New password (min 12 chars)">
+            <input type="password" name="security_password_confirm" placeholder="Confirm new password">
+            <button type="submit">Add / Update Account</button>
+          </form>
+          <form method="post" action="/setup/security/delete" class="setup-form setup-form-compact" style="margin-top:0.8rem;">
+            <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+            <input type="hidden" name="next" value="{{ return_query }}">
+            <input type="text" name="security_user_delete" placeholder="Username to delete">
+            <button type="submit" class="danger">Delete Account</button>
+          </form>
+        </details>
+
+        <details class="setup-block">
+          <summary>AI Filing Behavior</summary>
+          <p class="muted">Tune how strict auto-filing is and add instructions for tricky document types (for example: "MOT certificates should be vehicles, never invoice").</p>
+          <form method="post" action="/setup/ai" class="setup-form">
+            <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+            <input type="hidden" name="next" value="{{ return_query }}">
+            <input type="number" min="0" max="1" step="0.01" name="min_confidence_autofile" value="{{ setup_defaults.ai_confidence }}" placeholder="Auto-file confidence threshold 0..1">
+            <textarea name="classification_guidance" rows="5" placeholder="Optional custom guidance for classifier">{{ setup_defaults.ai_guidance }}</textarea>
+            <textarea name="per_type_min_confidence" rows="4" placeholder='JSON per-type confidence thresholds, e.g. {"vehicles": 0.8, "invoice": 0.7}'>{{ setup_defaults.ai_per_type_conf }}</textarea>
+            <textarea name="keyword_overrides" rows="4" placeholder='JSON phrase->type overrides, e.g. {"mot test certificate":"vehicles"}'>{{ setup_defaults.ai_keyword_overrides }}</textarea>
+            <textarea name="negative_type_keywords" rows="4" placeholder='JSON type->[keywords] blocks, e.g. {"invoice":["mot","dvsa"]}'>{{ setup_defaults.ai_negative_keywords }}</textarea>
+            <input type="text" name="ocr_language" value="{{ setup_defaults.ocr_language }}" placeholder="OCR language code (e.g. eng)">
+            <label class="checkline"><input type="checkbox" name="ocr_skip_text" {% if setup_defaults.ocr_skip_text %}checked{% endif %}> OCR skip pages that already contain text</label>
+            <label class="checkline"><input type="checkbox" name="ocr_rotate_pages" {% if setup_defaults.ocr_rotate_pages %}checked{% endif %}> OCR auto-rotate pages</label>
+            <label class="checkline"><input type="checkbox" name="ocr_deskew" {% if setup_defaults.ocr_deskew %}checked{% endif %}> OCR deskew pages</label>
+            <label class="checkline"><input type="checkbox" name="ocr_clean" {% if setup_defaults.ocr_clean %}checked{% endif %}> OCR clean noisy scans</label>
+            <input type="text" name="ocr_extra_args" value="{{ setup_defaults.ocr_extra_args }}" placeholder="Additional OCR CLI args (optional)">
+            <button type="submit">Save AI Tuning</button>
+          </form>
+        </details>
       </section>
     </div>
+    {% endif %}
 
     <section class="queue-wrap">
       <h2>Pending / Processing</h2>
@@ -131,7 +351,13 @@
     </section>
 
     <section class="tree-wrap">
-      <h2>Directory Tree</h2>
+      <div class="tree-head">
+        <h2>Directory Tree</h2>
+        <div class="tree-head-actions">
+          <button type="button" id="tree-expand-all" class="tree-toggle-btn">Expand All</button>
+          <button type="button" id="tree-collapse-all" class="tree-toggle-btn">Collapse All</button>
+        </div>
+      </div>
       <input type="text" id="tree-filter" class="tree-filter" placeholder="Filter tree folders/files (client-side)">
       {% if tree_roots %}
       {% macro render_nodes(nodes) %}
@@ -161,9 +387,26 @@
     </section>
 
     <section class="table-wrap">
+      <form method="post" action="/move-inbox-bulk" class="bulk-move-form" id="bulk-move-form">
+        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+        <input type="hidden" name="next" value="{{ return_query }}">
+        <div class="bulk-move-controls">
+          <label class="checkline"><input type="checkbox" id="select-all-docs"> Select all visible</label>
+          <select name="target_user" id="bulk-target-user">
+            <option value="">Move selected to user inbox...</option>
+            <option value="generic">Generic inbox</option>
+            {% for u in inbox_users %}
+            <option value="{{ u }}">{{ u }}</option>
+            {% endfor %}
+          </select>
+          <button type="submit" id="bulk-move-submit">Transfer Selected</button>
+          <small class="muted" id="bulk-selected-count">0 selected</small>
+        </div>
+
       <table>
         <thead>
           <tr>
+            <th>Select</th>
             <th>Status</th>
             <th>File</th>
             <th>Type</th>
@@ -174,8 +417,16 @@
         </thead>
         <tbody>
           {% for d in documents %}
-          <tr class="doc-row" data-row-id="{{ loop.index0 }}" onclick="toggleRowById(event, '{{ loop.index0 }}')" role="button" tabindex="0" onkeydown="toggleRowByKey(event, '{{ loop.index0 }}')">
-            <td><span class="chip chip-{{ d.bucket }}">{{ d.bucket }}</span></td>
+          <tr class="doc-row {% if d.auto_filed_recent %}doc-row-autofile{% endif %}" data-row-id="{{ loop.index0 }}" onclick="toggleRowById(event, '{{ loop.index0 }}')" role="button" tabindex="0" onkeydown="toggleRowByKey(event, '{{ loop.index0 }}')">
+            <td>
+              <input type="checkbox" class="doc-select" name="selected" value="{{ d.bucket }}|{{ d.rel_path }}">
+            </td>
+            <td>
+              <span class="chip chip-{{ d.bucket }}">{{ d.bucket }}</span>
+              {% if d.auto_filed_recent %}
+              <span class="chip chip-autofile" title="Auto-filed at {{ d.auto_filed_iso }}">auto-filed</span>
+              {% endif %}
+            </td>
             <td class="path"><a href="{{ url_for('open_document', bucket=d.bucket, rel_path=d.rel_path) }}" target="_blank" rel="noopener" title="{{ d.rel_path }}">{{ d.filename }}</a></td>
             <td>{{ d.doc_type }}</td>
             <td>{{ d.scanned_iso }}</td>
@@ -183,7 +434,7 @@
             <td class="path" title="{{ d.rel_path }}">{{ d.rel_path }}</td>
           </tr>
           <tr class="doc-detail-row" id="detail-{{ loop.index0 }}" hidden>
-            <td colspan="6">
+            <td colspan="7">
               <div class="detail-grid">
                 <div><strong>Sender:</strong> {{ d.sender or 'unknown' }}</div>
                 <div><strong>Year:</strong> {{ d.year or '-' }}</div>
@@ -194,6 +445,7 @@
               <div class="detail-long"><strong>Keywords:</strong> {{ d.keywords|join(', ') if d.keywords else '-' }}</div>
 
               <form method="post" action="/keywords" class="keyword-form">
+                <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
                 <input type="hidden" name="src_bucket" value="{{ d.bucket }}">
                 <input type="hidden" name="rel_path" value="{{ d.rel_path }}">
                 <input type="hidden" name="next" value="{{ return_query }}">
@@ -202,6 +454,7 @@
               </form>
 
               <form method="post" action="/move" class="move-form">
+                <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
                 <input type="hidden" name="src_bucket" value="{{ d.bucket }}">
                 <input type="hidden" name="rel_path" value="{{ d.rel_path }}">
                 <input type="hidden" name="next" value="{{ return_query }}">
@@ -224,6 +477,7 @@
               </form>
 
               <form method="post" action="/add-category" class="inline-category-form">
+                <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
                 <input type="hidden" name="next" value="{{ return_query }}">
                 <input type="text" name="new_category" placeholder="new category for this item">
                 <button type="submit">Add Category</button>
@@ -231,6 +485,7 @@
 
               <div class="detail-actions">
                 <form method="post" action="/split-manual" class="split-manual-form">
+                  <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
                   <input type="hidden" name="src_bucket" value="{{ d.bucket }}">
                   <input type="hidden" name="rel_path" value="{{ d.rel_path }}">
                   <input type="hidden" name="next" value="{{ return_query }}">
@@ -238,6 +493,7 @@
                   <button type="submit">Split @ pages + Reprocess</button>
                 </form>
                 <form method="post" action="/delete" class="delete-form" onsubmit="return confirm('Delete this file permanently? {{ d.rel_path }}');">
+                  <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
                   <input type="hidden" name="src_bucket" value="{{ d.bucket }}">
                   <input type="hidden" name="rel_path" value="{{ d.rel_path }}">
                   <input type="hidden" name="next" value="{{ return_query }}">
@@ -249,6 +505,7 @@
           {% endfor %}
         </tbody>
       </table>
+      </form>
     </section>
   </main>
 
@@ -348,7 +605,75 @@
       el.addEventListener('click', (ev) => ev.stopPropagation());
     });
 
+    const selectAllDocs = document.getElementById('select-all-docs');
+    const bulkSelectedCount = document.getElementById('bulk-selected-count');
+    const bulkMoveForm = document.getElementById('bulk-move-form');
+    const bulkTargetUser = document.getElementById('bulk-target-user');
+
+    function selectedDocCheckboxes() {
+      return Array.from(document.querySelectorAll('.doc-select'));
+    }
+
+    function updateSelectedCount() {
+      const selectedCount = selectedDocCheckboxes().filter((cb) => cb.checked).length;
+      if (bulkSelectedCount) {
+        bulkSelectedCount.textContent = `${selectedCount} selected`;
+      }
+      if (selectAllDocs) {
+        const all = selectedDocCheckboxes();
+        const allChecked = all.length > 0 && all.every((cb) => cb.checked);
+        selectAllDocs.checked = allChecked;
+      }
+    }
+
+    selectedDocCheckboxes().forEach((cb) => {
+      cb.addEventListener('change', updateSelectedCount);
+    });
+
+    if (selectAllDocs) {
+      selectAllDocs.addEventListener('change', () => {
+        const checked = !!selectAllDocs.checked;
+        selectedDocCheckboxes().forEach((cb) => {
+          cb.checked = checked;
+        });
+        updateSelectedCount();
+      });
+    }
+
+    if (bulkMoveForm) {
+      bulkMoveForm.addEventListener('submit', (ev) => {
+        const selectedCount = selectedDocCheckboxes().filter((cb) => cb.checked).length;
+        if (!bulkTargetUser || !bulkTargetUser.value) {
+          ev.preventDefault();
+          alert('Choose a destination inbox first.');
+          return;
+        }
+        if (selectedCount === 0) {
+          ev.preventDefault();
+          alert('Select at least one document.');
+          return;
+        }
+      });
+    }
+
+    updateSelectedCount();
+
     const treeFilter = document.getElementById('tree-filter');
+    const treeExpandAllBtn = document.getElementById('tree-expand-all');
+    const treeCollapseAllBtn = document.getElementById('tree-collapse-all');
+
+    function setAllTreeNodes(open) {
+      document.querySelectorAll('.tree-wrap .tree-node').forEach((node) => {
+        node.open = open;
+      });
+    }
+
+    if (treeExpandAllBtn) {
+      treeExpandAllBtn.addEventListener('click', () => setAllTreeNodes(true));
+    }
+    if (treeCollapseAllBtn) {
+      treeCollapseAllBtn.addEventListener('click', () => setAllTreeNodes(false));
+    }
 
     function applyTreeFilter() {
       if (!treeFilter) return;

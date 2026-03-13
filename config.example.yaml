@@ -12,12 +12,18 @@ ocr:
   command: ocrmypdf
   language: eng
   skip_text: true
+  rotate_pages: true
+  deskew: true
+  clean: false
+  extra_args: ""
 
 llm:
   enabled: true
   timeout_seconds: 240
   max_input_chars: 2800
   min_confidence_autofile: 0.60
+  # Optional extra instructions for edge cases (for example: "MOT certificates are vehicles, never invoice")
+  classification_guidance: ""
   # llama.cpp mode: keep {prompt} exactly as-is.
   # Option A – Ollama (recommended, no JSON schema flag needed):
   # command_template: ollama run qwen2.5:3b-instruct
@@ -62,6 +68,13 @@ rules:
     - personal
     - unknown
   unknown_doc_type: unknown
+  # Force category if phrase appears in extracted text.
+  keyword_overrides: {}
+  # If a document was classified as type X, but one of these keywords appears,
+  # classification is downgraded to unknown for manual review.
+  negative_type_keywords: {}
+  # Optional category-specific confidence thresholds for auto-filing.
+  per_type_min_confidence: {}
 
 poll_seconds: 5
 inbox_settle_seconds: 90

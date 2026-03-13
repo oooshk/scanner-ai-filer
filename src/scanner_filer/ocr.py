@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import shlex
 import shutil
 import subprocess
 from pathlib import Path
@@ -26,10 +27,18 @@ def run_ocr(input_pdf: Path, ocr_cfg: OCRConfig) -> Path:
         "--language",
         ocr_cfg.language,
     ]
+    if ocr_cfg.rotate_pages:
+        cmd.append("--rotate-pages")
+    if ocr_cfg.deskew:
+        cmd.append("--deskew")
+    if ocr_cfg.clean:
+        cmd.append("--clean")
     if ocr_cfg.skip_text:
         cmd.append("--skip-text")
     else:
         cmd.append("--redo-ocr")
+    if ocr_cfg.extra_args:
+        cmd.extend(shlex.split(ocr_cfg.extra_args))
     cmd.extend([str(input_pdf), str(output_pdf)])
 
     logger.info("Running OCR for %s", input_pdf.name)

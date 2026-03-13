@@ -33,11 +33,33 @@ body {
   letter-spacing: 0.4px;
 }
 
+.hero p {
+  margin: 8px 0 0;
+}
+
 .hero {
   background: linear-gradient(120deg, var(--hero-a), var(--hero-b));
   border: 1px solid var(--line);
   border-radius: 14px;
   padding: 14px 16px;
+}
+
+.hero-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.hero-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.hero-actions form {
+  margin: 0;
 }
 
 .notice {
@@ -52,7 +74,6 @@ body {
 }
 
 .setup-launch {
-  margin-top: 6px;
   background: #2c4a7a;
 }
 
@@ -182,6 +203,23 @@ button:hover {
   border-radius: 12px;
 }
 
+.bulk-move-form {
+  margin: 0;
+}
+
+.bulk-move-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  padding: 10px;
+  border-bottom: 1px solid #e6efe9;
+}
+
+.bulk-move-controls select {
+  min-width: 220px;
+}
+
 .queue-wrap {
   margin-bottom: 16px;
   border: 1px solid var(--line);
@@ -201,6 +239,24 @@ button:hover {
 .tree-wrap h2 {
   margin: 2px 0 10px;
   font-size: 18px;
+}
+
+.tree-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.tree-head-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.tree-toggle-btn {
+  background: #2f5d54;
+  padding: 6px 10px;
+  font-size: 12px;
 }
 
 .tree-filter {
@@ -309,6 +365,14 @@ th {
 
 .doc-row:hover {
   background: #edf6f9;
+}
+
+.doc-row-autofile {
+  background: #fff8d8;
+}
+
+.doc-row-autofile:hover {
+  background: #fff2bc;
 }
 
 .doc-detail-row td {
@@ -468,6 +532,12 @@ th {
   border-radius: 999px;
   font-size: 12px;
   font-weight: 600;
+}
+
+.chip-autofile {
+  background: #f59f00;
+  color: #111;
+  margin-left: 6px;
 }
 
 .chip-archive { background: #d2f5ea; color: #0e5b4f; }

@@ -70,7 +70,7 @@ def process_pending(cfg: AppConfig) -> int:
         logger.info("Recovered %s orphan file(s) from processing", recovered)
     now = datetime.now(timezone.utc).timestamp()
     seen_keys: set[str] = set()
-    for entry in sorted(cfg.paths.inbox.iterdir()):
+    for entry in sorted(cfg.paths.inbox.rglob("*.pdf")):
         if not _is_pdf(entry):
             continue
         seen_keys.add(str(entry.resolve()))
