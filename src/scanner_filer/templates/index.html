@@ -382,29 +382,33 @@
           </div>
         </div>
         <div class="bulk-move-controls">
-          <label class="checkline"><input type="checkbox" id="select-all-docs"> Select all visible</label>
-          <select name="target_user" id="bulk-target-user">
-            <option value="">Move selected to user inbox...</option>
-            <option value="generic">Generic inbox</option>
-            {% for u in inbox_users %}
-            <option value="{{ u }}">{{ u }}</option>
-            {% endfor %}
-          </select>
-          <select id="docs-sort-by">
-            <option value="received" {% if sort_by == 'received' %}selected{% endif %}>Sort: Time Received</option>
-            <option value="processed" {% if sort_by == 'processed' %}selected{% endif %}>Sort: Last Processed</option>
-            <option value="location" {% if sort_by == 'location' %}selected{% endif %}>Sort: Folder Location</option>
-            <option value="type" {% if sort_by == 'type' %}selected{% endif %}>Sort: Category</option>
-            <option value="sender" {% if sort_by == 'sender' %}selected{% endif %}>Sort: Sender</option>
-            <option value="size" {% if sort_by == 'size' %}selected{% endif %}>Sort: Size</option>
-            <option value="name" {% if sort_by == 'name' %}selected{% endif %}>Sort: Filename</option>
-          </select>
-          <select id="docs-sort-dir">
-            <option value="desc" {% if sort_dir == 'desc' %}selected{% endif %}>Newest / Z-A</option>
-            <option value="asc" {% if sort_dir == 'asc' %}selected{% endif %}>Oldest / A-Z</option>
-          </select>
-          <button type="submit" id="bulk-move-submit">Transfer Selected</button>
-          <small class="muted" id="bulk-selected-count">0 selected</small>
+          <div class="bulk-controls-left">
+            <label class="checkline"><input type="checkbox" id="select-all-docs"> Select all visible</label>
+            <select name="target_user" id="bulk-target-user">
+              <option value="">Move selected to user inbox...</option>
+              <option value="generic">Generic inbox</option>
+              {% for u in inbox_users %}
+              <option value="{{ u }}">{{ u }}</option>
+              {% endfor %}
+            </select>
+            <button type="submit" id="bulk-move-submit">Transfer Selected</button>
+            <small class="muted" id="bulk-selected-count">0 selected</small>
+          </div>
+          <div class="bulk-controls-right">
+            <select id="docs-sort-by">
+              <option value="received" {% if sort_by == 'received' %}selected{% endif %}>Sort: Time Received</option>
+              <option value="processed" {% if sort_by == 'processed' %}selected{% endif %}>Sort: Last Processed</option>
+              <option value="location" {% if sort_by == 'location' %}selected{% endif %}>Sort: Folder Location</option>
+              <option value="type" {% if sort_by == 'type' %}selected{% endif %}>Sort: Category</option>
+              <option value="sender" {% if sort_by == 'sender' %}selected{% endif %}>Sort: Sender</option>
+              <option value="size" {% if sort_by == 'size' %}selected{% endif %}>Sort: Size</option>
+              <option value="name" {% if sort_by == 'name' %}selected{% endif %}>Sort: Filename</option>
+            </select>
+            <select id="docs-sort-dir">
+              <option value="desc" {% if sort_dir == 'desc' %}selected{% endif %}>Newest / Z-A</option>
+              <option value="asc" {% if sort_dir == 'asc' %}selected{% endif %}>Oldest / A-Z</option>
+            </select>
+          </div>
         </div>
         <div class="doc-list-controls">
           <button type="button" id="docs-expand-all" class="tree-toggle-btn">Expand All Details</button>
