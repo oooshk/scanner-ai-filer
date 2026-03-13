@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Home Document Ops Hub - Login</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <main class="layout">
+    <section class="setup-wrap" style="max-width: 480px; margin: 48px auto;">
+      <h1>Home Document Ops Hub</h1>
+      <p class="muted">Sign in to access documents and admin actions.</p>
+      {% if msg %}
+      <div class="notice">{{ msg }}</div>
+      {% endif %}
+      <form method="post" action="{{ url_for('login') }}" class="setup-form">
+        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+        <input type="hidden" name="next" value="{{ next_url }}">
+        <input type="text" name="username" placeholder="Username" autocomplete="username" required>
+        <input type="password" name="password" placeholder="Password" autocomplete="current-password" required>
+        <button type="submit">Sign In</button>
+      </form>
+    </section>
+  </main>
+</body>
+</html>

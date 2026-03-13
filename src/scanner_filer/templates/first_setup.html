@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Home Document Ops Hub - Initial Security Setup</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <main class="layout">
+    <section class="setup-wrap" style="max-width: 560px; margin: 48px auto;">
+      <h1>Initial Security Setup</h1>
+      <p class="muted">Create your first admin login before using Home Document Ops Hub.</p>
+      {% if msg %}
+      <div class="notice">{{ msg }}</div>
+      {% endif %}
+      <form method="post" action="{{ url_for('first_setup') }}" class="setup-form">
+        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+        <input type="text" name="username" placeholder="Admin username" required>
+        <input type="password" name="password" placeholder="Password (min 12 chars)" autocomplete="new-password" required>
+        <input type="password" name="confirm_password" placeholder="Confirm password" autocomplete="new-password" required>
+        <button type="submit">Complete Initial Setup</button>
+      </form>
+    </section>
+  </main>
+</body>
+</html>

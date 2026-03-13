@@ -1,0 +1,23 @@
+[Unit]
+Description=Scanner Filer Web UI
+After=network-online.target scanner-filer.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User={{SCANNER_USER}}
+WorkingDirectory={{SCANNER_DIR}}
+Environment=PYTHONPATH={{SCANNER_DIR}}/src
+Environment=SCANNER_WEB_USER={{WEB_USER}}
+Environment=SCANNER_WEB_PASSWORD={{WEB_PASSWORD}}
+Environment=SCANNER_WEB_ENABLE_SETUP={{WEB_ENABLE_SETUP}}
+Environment=SCANNER_WEB_SECURE_COOKIE={{WEB_SECURE_COOKIE}}
+# LAN-only allowlist: localhost + RFC1918 private ranges.
+Environment=SCANNER_WEB_ALLOWED_NETS={{WEB_ALLOWED_NETS}}
+Environment=SCANNER_WEB_DISABLE_AUTH={{WEB_DISABLE_AUTH}}
+ExecStart={{PYTHON_BIN}} -m scanner_filer.web --config {{CONFIG_PATH}} --host {{WEB_HOST}} --port {{WEB_PORT}}
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

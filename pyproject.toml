@@ -1,0 +1,49 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "scanner-ai-filer"
+version = "1.0.0"
+description = "AI-powered Raspberry Pi scanner filing system with OCR, LLM classification, NAS filing, and a web management UI"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.10"
+authors = [
+  { name = "Home Document Ops" }
+]
+keywords = ["scanner", "document", "ocr", "llm", "raspberry-pi", "nas", "filing"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Environment :: Web Environment",
+  "Intended Audience :: End Users/Desktop",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Office/Business",
+  "Topic :: Utilities",
+]
+dependencies = [
+  "Flask>=3.1.0",
+  "PyYAML>=6.0",
+  "watchdog>=6.0.0",
+  "pypdf>=5.4.0",
+]
+
+[project.scripts]
+scanner-filer = "scanner_filer.cli:main"
+scanner-filer-web = "scanner_filer.web:main"
+
+[project.urls]
+Homepage = "https://github.com/oooshk/scanner-ai-filer"
+Repository = "https://github.com/oooshk/scanner-ai-filer"
+Issues = "https://github.com/oooshk/scanner-ai-filer/issues"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"scanner_filer" = ["templates/**/*", "static/**/*"]

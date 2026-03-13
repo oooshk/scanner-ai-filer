@@ -1,0 +1,910 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Home Document Ops Hub</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <main class="layout">
+    <header class="hero">
+      <div class="hero-top">
+        <div>
+          <h1>Home Document Ops Hub</h1>
+          <p>Monitor queue activity, browse folders, and manage filing decisions across archive, review, and rejected.</p>
+        </div>
+        <div class="hero-actions">
+          <form method="post" action="/logout" class="inline-category-form">
+            <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+            <button type="submit">Log Out</button>
+          </form>
+          {% if setup_enabled %}
+          <button type="button" id="open-setup" class="setup-launch">Setup</button>
+          {% endif %}
+        </div>
+      </div>
+    </header>
+
+    {% if msg %}
+      <div class="notice">{{ msg }}</div>
+    {% endif %}
+
+    <section class="controls">
+      <form method="get" action="/" class="search-form" id="search-form">
+        <input type="text" name="q" value="{{ q }}" placeholder="Search filename, sender, category, keywords (example: rob, dkms)">
+        <input type="hidden" name="bucket" id="bucket-hidden" value="{{ bucket }}">
+        <input type="hidden" name="sort_by" id="sort-by-hidden" value="{{ sort_by }}">
+        <input type="hidden" name="sort_dir" id="sort-dir-hidden" value="{{ sort_dir }}">
+        <button type="submit">Search</button>
+      </form>
+    </section>
+
+    {% if setup_enabled %}
+    <div id="setup-modal" class="setup-modal" hidden>
+      <div class="setup-modal-backdrop" data-close-setup="1"></div>
+      <section class="setup-wrap setup-modal-panel">
+        <div class="setup-modal-head">
+          <h2>Setup</h2>
+          <button type="button" id="close-setup" class="setup-close">Close</button>
+        </div>
+        <p class="muted">Use these sections to configure: 1) NAS destination storage, 2) Pi scanner upload shares, 3) user accounts, and 4) AI filing behavior.</p>
+
+        <details class="setup-block" open>
+          <summary>NAS Samba Setup</summary>
+          <p class="muted">This connects the Pi to your NAS. The NAS Share Name is the remote shared folder on the NAS (often "Public"). The Subdirectory is your filing folder inside that share (for example "Home Filing").</p>
+          <form method="post" action="/setup/nas" class="setup-form">
+            <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+            <input type="hidden" name="next" value="{{ return_query }}">
+            <input type="text" name="nas_host" value="{{ setup_defaults.nas_host }}" placeholder="NAS host/IP (example: 192.168.1.10)">
+            <input type="text" name="nas_share" value="{{ setup_defaults.nas_share }}" placeholder="NAS share name on NAS (example: Public)">
+            <input type="text" name="nas_user" value="{{ setup_defaults.nas_user }}" placeholder="NAS login username">
+            <input type="password" name="nas_pass" placeholder="NAS login password">
+            <input type="text" name="mount_point" value="{{ setup_defaults.mount_point }}" placeholder="Mount path on Pi (example: /mnt/nas)">
+            <input type="text" name="subdir" value="{{ setup_defaults.subdir }}" placeholder="Folder inside NAS share for filing (example: Home Filing)">
+            <button type="submit">Apply NAS Setup</button>
+          </form>
+        </details>
+
+        <details class="setup-block">
+          <summary>Scanner Inbox Samba Setup</summary>
+          <p class="muted">This creates a Samba upload share on the Pi itself for scanners. It is separate from NAS login. Use this if you want one general scanner share.</p>
+          <form method="post" action="/setup/scanner-share" class="setup-form">
+            <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+            <input type="hidden" name="next" value="{{ return_query }}">
+            <input type="text" name="scanner_user" value="{{ setup_defaults.scanner_user }}" placeholder="Pi Samba username for scanner uploads">
+            <input type="password" name="scanner_pass" placeholder="Pi Samba password for scanner uploads">
+            <input type="text" name="scanner_share" value="{{ setup_defaults.scanner_share }}" placeholder="Share name on Pi (example: scanner_inbox)">
+            <input type="text" name="inbox_dir" value="{{ setup_defaults.inbox }}" placeholder="Local inbox folder (example: /opt/scanner-filer/inbox)">
+            <button type="submit">Apply Scanner Share Setup</button>
+          </form>
+        </details>
+
+        <details class="setup-block">
+          <summary>User Inboxes</summary>
+          <p class="muted">Create one scanner inbox per person. Each person can have their own NAS login and own destination filing root.</p>
+          <p class="muted">Field guide: NAS Share Name is the remote NAS share (often "Public"). Subdirectory is the folder inside that share (for example "Home Filing"). Apply User Inboxes below creates Samba shares on the Pi for scanner uploads.</p>
+          <p class="muted">Important: the Samba username for each Pi scanner share is the inbox name (for example Rob -> scanner_Rob with username Rob). The Samba password here is for those Pi shares and is separate from web login account passwords.</p>
+          <div id="user-inboxes-list">
+            <p>Loading inboxes...</p>
+          </div>
+          <div class="setup-form setup-form-compact">
+            <h4>Add New User Inbox</h4>
+            <form method="post" action="/setup/user-inbox/add" class="setup-form">
+              <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+              <input type="hidden" name="next" value="{{ return_query }}">
+              <input type="text" name="name" placeholder="Username (e.g., rob, john)" pattern="[A-Za-z0-9._-]{3,64}" title="3-64 chars, letters/numbers/._-">
+              <input type="text" name="nas_host" value="{{ setup_defaults.nas_host }}" placeholder="NAS host/IP (example: 192.168.1.10)">
+              <input type="text" name="nas_share" value="{{ setup_defaults.nas_share }}" placeholder="NAS share name on NAS (often Public)">
+              <input type="text" name="nas_user" placeholder="NAS username for this person">
+              <input type="password" name="nas_pass" placeholder="NAS password for this person">
+              <input type="text" name="nas_subdir" value="Home Filing" placeholder="Folder inside NAS share (example: Home Filing)">
+              <button type="submit">Add Inbox</button>
+            </form>
+          </div>
+          <div class="setup-form setup-form-compact" style="margin-top: 1rem;">
+            <h4>Edit Existing User Inbox</h4>
+            <form method="post" action="/setup/user-inbox/update" class="setup-form" id="user-inbox-edit-form">
+              <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+              <input type="hidden" name="next" value="{{ return_query }}">
+              <select name="current_name" id="edit-current-name">
+                <option value="">Select existing user inbox</option>
+              </select>
+              <input type="text" name="name" id="edit-name" placeholder="Updated username">
+              <input type="text" name="samba_share" id="edit-samba-share" placeholder="Pi share name (example: scanner_rob)">
+              <input type="text" name="nas_host" id="edit-nas-host" placeholder="NAS host/IP">
+              <input type="text" name="nas_share" id="edit-nas-share" placeholder="NAS share name (often Public)">
+              <input type="text" name="nas_user" id="edit-nas-user" placeholder="NAS username">
+              <input type="password" name="nas_pass" id="edit-nas-pass" placeholder="NAS password (required only if NAS details changed)">
+              <input type="text" name="nas_subdir" id="edit-nas-subdir" placeholder="Folder inside NAS share (example: Home Filing)">
+              <label class="checkline"><input type="checkbox" name="enabled" id="edit-enabled" checked> Enabled</label>
+              <button type="submit">Save User Inbox Changes</button>
+            </form>
+          </div>
+          <div class="setup-form setup-form-compact" style="margin-top: 1rem;">
+            <h4>Apply Pi Scanner Shares</h4>
+            <form method="post" action="/setup/user-inbox/apply" class="setup-form">
+              <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+              <input type="hidden" name="next" value="{{ return_query }}">
+              <input type="password" name="samba_password" placeholder="Password for Pi Samba user shares (scanner_rob, scanner_jane, etc.)">
+              <button type="submit">Create/Update Pi Scanner Shares</button>
+            </form>
+          </div>
+          <script>
+            let userInboxCache = {};
+
+            function loadUserInboxes() {
+              fetch('/api/user-inboxes')
+                .then(r => r.json())
+                .then(data => {
+                  const list = document.getElementById('user-inboxes-list');
+                  const inboxes = data.inboxes || {};
+                  userInboxCache = inboxes;
+                  if (Object.keys(inboxes).length === 0) {
+                    list.innerHTML = '<p class="muted">No user inboxes configured yet.</p>';
+                    const select = document.getElementById('edit-current-name');
+                    if (select) {
+                      select.innerHTML = '<option value="">Select existing user inbox</option>';
+                    }
+                    return;
+                  }
+                  let html = '<table style="width:100%; margin-bottom:1rem;"><thead><tr><th>Username</th><th>Samba Share</th><th>NAS Login</th><th>Archive Path</th><th>Action</th></tr></thead><tbody>';
+                  for (const [name, config] of Object.entries(inboxes)) {
+                    const nasLogin = `${config.nas_user || 'N/A'} @ ${config.nas_host || 'N/A'}`;
+                    html += `<tr><td>${name}</td><td>${config.samba_share || 'N/A'}</td><td>${nasLogin}</td><td>${config.archive_path || 'N/A'}</td>`;
+                    html += `<td><form method="post" action="/setup/user-inbox/delete" style="display:inline;"><input type="hidden" name="_csrf" value="{{ csrf_token() }}"><input type="hidden" name="next" value="{{ return_query }}"><input type="hidden" name="name" value="${name}"><button type="submit" class="danger" style="padding:0.25rem 0.5rem; font-size:0.9rem;">Delete</button></form></td></tr>`;
+                  }
+                  html += '</tbody></table>';
+                  list.innerHTML = html;
+
+                  const select = document.getElementById('edit-current-name');
+                  if (select) {
+                    select.innerHTML = '<option value="">Select existing user inbox</option>';
+                    Object.keys(inboxes).sort().forEach((name) => {
+                      const opt = document.createElement('option');
+                      opt.value = name;
+                      opt.textContent = name;
+                      select.appendChild(opt);
+                    });
+                  }
+                })
+                .catch(err => {
+                  document.getElementById('user-inboxes-list').innerHTML = '<p class="error">Failed to load inboxes: ' + err.message + '</p>';
+                });
+            }
+
+            function fillUserInboxEditForm(name) {
+              const cfg = userInboxCache[name] || {};
+              const setVal = (id, value) => {
+                const el = document.getElementById(id);
+                if (el) {
+                  el.value = value || '';
+                }
+              };
+              setVal('edit-name', name || '');
+              setVal('edit-samba-share', cfg.samba_share || '');
+              setVal('edit-nas-host', cfg.nas_host || '');
+              setVal('edit-nas-share', cfg.nas_share || '');
+              setVal('edit-nas-user', cfg.nas_user || '');
+              setVal('edit-nas-subdir', cfg.nas_subdir || '');
+              const enabled = document.getElementById('edit-enabled');
+              if (enabled) {
+                enabled.checked = cfg.enabled !== false;
+              }
+              const pass = document.getElementById('edit-nas-pass');
+              if (pass) {
+                pass.value = '';
+              }
+            }
+
+            function loadSecurityAccounts() {
+              fetch('/api/security-accounts')
+                .then(r => r.json())
+                .then(data => {
+                  const panel = document.getElementById('security-accounts-list');
+                  if (!panel) {
+                    return;
+                  }
+                  const accounts = data.accounts || [];
+                  if (!accounts.length) {
+                    panel.innerHTML = '<p class="muted">No login accounts found.</p>';
+                    return;
+                  }
+                  let html = '<ul class="tree-list">';
+                  for (const account of accounts) {
+                    html += `<li><strong>${account.username}</strong></li>`;
+                  }
+                  html += '</ul>';
+                  panel.innerHTML = html;
+                })
+                .catch(() => {
+                  const panel = document.getElementById('security-accounts-list');
+                  if (panel) {
+                    panel.innerHTML = '<p class="muted">Unable to load login accounts.</p>';
+                  }
+                });
+            }
+
+            loadUserInboxes();
+            window.addEventListener('load', loadSecurityAccounts);
+            window.addEventListener('load', () => {
+              const select = document.getElementById('edit-current-name');
+              if (!select) {
+                return;
+              }
+              select.addEventListener('change', () => fillUserInboxEditForm(select.value));
+            });
+          </script>
+        </details>
+
+        <details class="setup-block">
+          <summary>Backup / Restore</summary>
+          <div class="setup-split">
+            <form method="post" action="/setup/backup/export" class="setup-form setup-form-compact">
+              <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+              <label class="checkline"><input type="checkbox" name="include_documents" checked> Include archive/review/rejected documents</label>
+              <button type="submit">Download Full Backup</button>
+            </form>
+
+            <form method="post" action="/setup/backup/restore" enctype="multipart/form-data" class="setup-form setup-form-compact">
+              <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+              <input type="hidden" name="next" value="{{ return_query }}">
+              <input type="file" name="backup_file" accept=".tar.gz,.tgz,application/gzip">
+              <button type="submit" class="danger">Restore Backup</button>
+            </form>
+          </div>
+          <p class="muted">Backup includes config, runtime state, setup scripts, source files, and optionally document folders. Restore merges files into the current system and may overwrite existing config/state files.</p>
+        </details>
+
+        <details class="setup-block">
+          <summary>Security Login Accounts</summary>
+          <p class="muted">Manage all usernames that can sign in to this web app. Add a new account or reset an existing account password.</p>
+          <div id="security-accounts-list">
+            <p>Loading login accounts...</p>
+          </div>
+          <form method="post" action="/setup/security" class="setup-form">
+            <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+            <input type="hidden" name="next" value="{{ return_query }}">
+            <input type="text" name="security_user" value="{{ setup_defaults.security_user }}" placeholder="Username to add/update">
+            <input type="password" name="security_password" placeholder="New password (min 12 chars)">
+            <input type="password" name="security_password_confirm" placeholder="Confirm new password">
+            <button type="submit">Add / Update Account</button>
+          </form>
+          <form method="post" action="/setup/security/delete" class="setup-form setup-form-compact" style="margin-top:0.8rem;">
+            <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+            <input type="hidden" name="next" value="{{ return_query }}">
+            <input type="text" name="security_user_delete" placeholder="Username to delete">
+            <button type="submit" class="danger">Delete Account</button>
+          </form>
+        </details>
+
+        <details class="setup-block">
+          <summary>AI Filing Behavior</summary>
+          <p class="muted">Tune how strict auto-filing is and add instructions for tricky document types (for example: "MOT certificates should be vehicles, never invoice").</p>
+          <form method="post" action="/setup/ai" class="setup-form">
+            <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+            <input type="hidden" name="next" value="{{ return_query }}">
+            <input type="number" min="0" max="1" step="0.01" name="min_confidence_autofile" value="{{ setup_defaults.ai_confidence }}" placeholder="Auto-file confidence threshold 0..1">
+            <textarea name="classification_guidance" rows="5" placeholder="Optional custom guidance for classifier">{{ setup_defaults.ai_guidance }}</textarea>
+            <textarea name="per_type_min_confidence" rows="4" placeholder='JSON per-type confidence thresholds, e.g. {"vehicles": 0.8, "invoice": 0.7}'>{{ setup_defaults.ai_per_type_conf }}</textarea>
+            <textarea name="keyword_overrides" rows="4" placeholder='JSON phrase->type overrides, e.g. {"mot test certificate":"vehicles"}'>{{ setup_defaults.ai_keyword_overrides }}</textarea>
+            <textarea name="negative_type_keywords" rows="4" placeholder='JSON type->[keywords] blocks, e.g. {"invoice":["mot","dvsa"]}'>{{ setup_defaults.ai_negative_keywords }}</textarea>
+            <input type="text" name="ocr_language" value="{{ setup_defaults.ocr_language }}" placeholder="OCR language code (e.g. eng)">
+            <label class="checkline"><input type="checkbox" name="ocr_skip_text" {% if setup_defaults.ocr_skip_text %}checked{% endif %}> OCR skip pages that already contain text</label>
+            <label class="checkline"><input type="checkbox" name="ocr_rotate_pages" {% if setup_defaults.ocr_rotate_pages %}checked{% endif %}> OCR auto-rotate pages</label>
+            <label class="checkline"><input type="checkbox" name="ocr_deskew" {% if setup_defaults.ocr_deskew %}checked{% endif %}> OCR deskew pages</label>
+            <label class="checkline"><input type="checkbox" name="ocr_clean" {% if setup_defaults.ocr_clean %}checked{% endif %}> OCR clean noisy scans</label>
+            <input type="text" name="ocr_extra_args" value="{{ setup_defaults.ocr_extra_args }}" placeholder="Additional OCR CLI args (optional)">
+            <button type="submit">Save AI Tuning</button>
+          </form>
+        </details>
+      </section>
+    </div>
+    {% endif %}
+
+    <section class="queue-wrap">
+      <h2>Pending / Processing</h2>
+      <table class="queue-table" id="queue-table" {% if not queue_rows %}hidden{% endif %}>
+        <thead>
+          <tr>
+            <th>File</th>
+            <th>Location</th>
+            <th>Stage</th>
+            <th>Progress</th>
+            <th>Size</th>
+            <th>Modified</th>
+          </tr>
+        </thead>
+        <tbody id="queue-body">
+          {% for qd in queue_rows %}
+          <tr>
+            <td class="path">{{ qd.filename }}</td>
+            <td>{{ qd.location }}</td>
+            <td>{{ qd.stage }}</td>
+            <td>
+              <progress class="pbar" value="{{ qd.percent }}" max="100"></progress>
+              <small>{{ qd.percent }}%</small>
+            </td>
+            <td>{{ qd.size_kb }} KB</td>
+            <td>{{ qd.modified_iso }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      <p class="muted" id="queue-empty" {% if queue_rows %}hidden{% endif %}>No files are currently pending or processing.</p>
+    </section>
+
+    <section class="tree-wrap">
+      <div class="tree-head">
+        <h2>Directory Tree</h2>
+        <div class="tree-head-actions">
+          <button type="button" id="tree-expand-all" class="tree-toggle-btn">Expand All</button>
+          <button type="button" id="tree-collapse-all" class="tree-toggle-btn">Collapse All</button>
+        </div>
+      </div>
+      <input type="text" id="tree-filter" class="tree-filter" placeholder="Filter tree folders/files (client-side)">
+      {% if tree_roots %}
+      {% macro render_nodes(nodes) %}
+        <ul class="tree-list">
+          {% for n in nodes %}
+          <li>
+            {% if n.is_file %}
+              <a class="tree-file" href="{{ url_for('open_document', bucket=n.bucket, rel_path=n.rel_path) }}" target="_blank" rel="noopener" title="{{ n.rel_path }}">{{ n.name }}</a>
+            {% else %}
+              <details class="tree-node">
+                <summary>{{ n.name }}</summary>
+                {% if n.children %}
+                  {{ render_nodes(n.children) }}
+                {% else %}
+                  <div class="muted">empty</div>
+                {% endif %}
+              </details>
+            {% endif %}
+          </li>
+          {% endfor %}
+        </ul>
+      {% endmacro %}
+      {{ render_nodes(tree_roots) }}
+      {% else %}
+      <p class="muted">No files match your current filter.</p>
+      {% endif %}
+    </section>
+
+    <section class="table-wrap" id="documents-section">
+      <form method="post" action="/move-inbox-bulk" class="bulk-move-form" id="bulk-move-form">
+        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+        <input type="hidden" name="next" value="{{ return_query }}">
+        <div class="docs-head">
+          <h2>Documents</h2>
+          <div class="docs-head-actions">
+            <button type="button" id="files-expand" class="tree-toggle-btn">Expand File List</button>
+            <button type="button" id="files-collapse" class="tree-toggle-btn">Collapse File List</button>
+          </div>
+        </div>
+        <div class="bulk-move-controls">
+          <div class="bulk-controls-left">
+            <label class="checkline"><input type="checkbox" id="select-all-docs"> Select all visible</label>
+            <select name="target_user" id="bulk-target-user">
+              <option value="">Move selected to user inbox...</option>
+              <option value="generic">Generic inbox</option>
+              {% for u in inbox_users %}
+              <option value="{{ u }}">{{ u }}</option>
+              {% endfor %}
+            </select>
+            <button type="submit" id="bulk-move-submit">Transfer Selected</button>
+            <small class="muted" id="bulk-selected-count">0 selected</small>
+          </div>
+          <div class="bulk-controls-right">
+            <select id="docs-sort-by">
+              <option value="received" {% if sort_by == 'received' %}selected{% endif %}>Sort: Time Received</option>
+              <option value="processed" {% if sort_by == 'processed' %}selected{% endif %}>Sort: Last Processed</option>
+              <option value="location" {% if sort_by == 'location' %}selected{% endif %}>Sort: Folder Location</option>
+              <option value="type" {% if sort_by == 'type' %}selected{% endif %}>Sort: Category</option>
+              <option value="sender" {% if sort_by == 'sender' %}selected{% endif %}>Sort: Sender</option>
+              <option value="size" {% if sort_by == 'size' %}selected{% endif %}>Sort: Size</option>
+              <option value="name" {% if sort_by == 'name' %}selected{% endif %}>Sort: Filename</option>
+            </select>
+            <select id="docs-sort-dir">
+              <option value="desc" {% if sort_dir == 'desc' %}selected{% endif %}>Newest / Z-A</option>
+              <option value="asc" {% if sort_dir == 'asc' %}selected{% endif %}>Oldest / A-Z</option>
+            </select>
+          </div>
+        </div>
+        <div class="doc-list-controls">
+          <button type="button" id="docs-expand-all" class="tree-toggle-btn">Expand All Details</button>
+          <button type="button" id="docs-collapse-all" class="tree-toggle-btn">Collapse All Details</button>
+        </div>
+
+      <div id="documents-table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Select</th>
+            <th>Status</th>
+            <th>File</th>
+            <th>Type</th>
+            <th>Scanned</th>
+            <th>Modified</th>
+            <th>Folder</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for d in documents %}
+          <tr class="doc-row {% if d.auto_filed_recent %}doc-row-autofile{% endif %}" data-row-id="{{ loop.index0 }}" data-rel-path="{{ d.rel_path }}" onclick="toggleRowById(event, '{{ loop.index0 }}')" role="button" tabindex="0" onkeydown="toggleRowByKey(event, '{{ loop.index0 }}')">
+            <td>
+              <input type="checkbox" class="doc-select" data-inbox-user="{{ d.inbox_user }}" name="selected" value="{{ d.bucket }}|{{ d.rel_path }}">
+            </td>
+            <td>
+              <span class="chip chip-{{ d.bucket }}">{{ d.bucket }}</span>
+              {% if d.inbox_user %}
+              <span class="chip chip-inbox" title="Currently in {{ d.inbox_user }} inbox">{{ d.inbox_user }}</span>
+              {% endif %}
+              {% if d.auto_filed_recent %}
+              <span class="chip chip-autofile" title="Auto-filed at {{ d.auto_filed_iso }}">auto-filed</span>
+              {% endif %}
+            </td>
+            <td class="path"><a href="{{ url_for('open_document', bucket=d.bucket, rel_path=d.rel_path) }}" target="_blank" rel="noopener" title="{{ d.rel_path }}">{{ d.filename }}</a></td>
+            <td>{{ d.doc_type }}</td>
+            <td>{{ d.scanned_iso }}</td>
+            <td>{{ d.modified_iso }}</td>
+            <td class="path" title="{{ d.rel_path }}">{{ d.rel_path }}</td>
+          </tr>
+          <tr class="doc-detail-row" id="detail-{{ loop.index0 }}" hidden>
+            <td colspan="7">
+              <div class="detail-grid">
+                <div><strong>Sender:</strong> {{ d.sender or 'unknown' }}</div>
+                <div><strong>Year:</strong> {{ d.year or '-' }}</div>
+                <div><strong>Size:</strong> {{ (d.size_bytes / 1024)|round(1) }} KB</div>
+                <div><strong>Suggested:</strong> {% if d.suggested_type %}{{ d.suggested_type }}{% elif d.doc_type and d.doc_type != 'unknown' %}already {{ d.doc_type }}{% else %}-{% endif %}</div>
+              </div>
+              <div class="detail-long"><strong>Full path:</strong> {{ d.rel_path }}</div>
+              <div class="detail-long"><strong>Keywords:</strong> {{ d.keywords|join(', ') if d.keywords else '-' }}</div>
+
+              <form method="post" action="/keywords" class="keyword-form">
+                <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+                <input type="hidden" name="src_bucket" value="{{ d.bucket }}">
+                <input type="hidden" name="rel_path" value="{{ d.rel_path }}">
+                <input type="hidden" name="next" value="{{ return_query }}">
+                <input type="text" name="keywords" value="{{ d.keywords|join(', ') }}" placeholder="comma-separated keywords">
+                <button type="submit">Save Keywords</button>
+              </form>
+
+              <form method="post" action="/move" class="move-form">
+                <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+                <input type="hidden" name="src_bucket" value="{{ d.bucket }}">
+                <input type="hidden" name="rel_path" value="{{ d.rel_path }}">
+                <input type="hidden" name="next" value="{{ return_query }}">
+
+                <select name="target_bucket">
+                  <option value="archive">archive</option>
+                  <option value="review">review</option>
+                  <option value="rejected">rejected</option>
+                </select>
+
+                <select name="target_type">
+                  {% for t in allowed_types %}
+                  <option value="{{ t }}" {% if d.target_default_type == t %}selected{% endif %}>{{ t }}</option>
+                  {% endfor %}
+                </select>
+
+                <input type="text" name="target_year" value="{{ d.year or '2026' }}" placeholder="year">
+                <input type="text" name="target_sender" value="{{ d.sender or 'unknown' }}" placeholder="sender">
+                <button type="submit">Move</button>
+              </form>
+
+              <form method="post" action="/add-category" class="inline-category-form">
+                <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+                <input type="hidden" name="next" value="{{ return_query }}">
+                <input type="text" name="new_category" placeholder="new category for this item">
+                <button type="submit">Add Category</button>
+              </form>
+
+              <div class="detail-actions">
+                <form method="post" action="/split-manual" class="split-manual-form">
+                  <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+                  <input type="hidden" name="src_bucket" value="{{ d.bucket }}">
+                  <input type="hidden" name="rel_path" value="{{ d.rel_path }}">
+                  <input type="hidden" name="next" value="{{ return_query }}">
+                  <input type="text" name="split_pages" placeholder="1,4,5" title="Start pages, 1-based">
+                  <button type="submit">Split @ pages + Reprocess</button>
+                </form>
+                <form method="post" action="/delete" class="delete-form" onsubmit="return confirm('Delete this file permanently? {{ d.rel_path }}');">
+                  <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+                  <input type="hidden" name="src_bucket" value="{{ d.bucket }}">
+                  <input type="hidden" name="rel_path" value="{{ d.rel_path }}">
+                  <input type="hidden" name="next" value="{{ return_query }}">
+                  <button type="submit" class="danger">Delete</button>
+                </form>
+              </div>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      </div>
+      </form>
+    </section>
+  </main>
+
+  <script>
+    let autoRefreshTimer = null;
+    const docsUiStateKey = 'docs_ui_state_v1';
+
+    function loadDocsUiState() {
+      try {
+        const raw = sessionStorage.getItem(docsUiStateKey);
+        if (!raw) return {};
+        const parsed = JSON.parse(raw);
+        return parsed && typeof parsed === 'object' ? parsed : {};
+      } catch (_err) {
+        return {};
+      }
+    }
+
+    function collectExpandedRelPaths() {
+      const out = [];
+      document.querySelectorAll('.doc-row').forEach((row) => {
+        const id = row.dataset.rowId;
+        const rel = row.dataset.relPath || '';
+        if (!id || !rel) return;
+        const detail = document.getElementById('detail-' + id);
+        if (detail && !detail.hidden) {
+          out.push(rel);
+        }
+      });
+      return out;
+    }
+
+    function saveDocsUiState() {
+      const tableWrap = document.getElementById('documents-table-wrap');
+      const payload = {
+        filesListOpen: !!(tableWrap && !tableWrap.hidden),
+        expandedRelPaths: collectExpandedRelPaths(),
+      };
+      try {
+        sessionStorage.setItem(docsUiStateKey, JSON.stringify(payload));
+      } catch (_err) {
+      }
+    }
+
+    function hasExpandedRows() {
+      return Array.from(document.querySelectorAll('.doc-detail-row')).some((row) => !row.hidden);
+    }
+
+    function userIsEditing() {
+      const active = document.activeElement;
+      if (!active) return false;
+      return ['INPUT', 'SELECT', 'TEXTAREA'].includes(active.tagName);
+    }
+
+    function queueRowHtml(row) {
+      return `<tr>
+        <td class="path">${escapeHtml(row.filename)}</td>
+        <td>${escapeHtml(row.location)}</td>
+        <td>${escapeHtml(row.stage)}</td>
+        <td><progress class="pbar" value="${Number(row.percent) || 0}" max="100"></progress> <small>${Number(row.percent) || 0}%</small></td>
+        <td>${Number(row.size_kb || 0).toFixed(1)} KB</td>
+        <td>${escapeHtml(row.modified_iso)}</td>
+      </tr>`;
+    }
+
+    function escapeHtml(s) {
+      return String(s || '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&#39;');
+    }
+
+    async function refreshQueueOnly() {
+      try {
+        const resp = await fetch('/api/queue', { cache: 'no-store' });
+        if (!resp.ok) return;
+        const data = await resp.json();
+        const rows = Array.isArray(data.rows) ? data.rows : [];
+        const body = document.getElementById('queue-body');
+        const table = document.getElementById('queue-table');
+        const empty = document.getElementById('queue-empty');
+        if (!body || !table || !empty) return;
+        if (rows.length === 0) {
+          body.innerHTML = '';
+          table.hidden = true;
+          empty.hidden = false;
+          return;
+        }
+        body.innerHTML = rows.map(queueRowHtml).join('');
+        table.hidden = false;
+        empty.hidden = true;
+      } catch (_err) {
+      }
+    }
+
+    function scheduleAutoRefresh() {
+      if (autoRefreshTimer) {
+        clearInterval(autoRefreshTimer);
+        autoRefreshTimer = null;
+      }
+      autoRefreshTimer = setInterval(() => {
+        if (userIsEditing()) {
+          return;
+        }
+        refreshQueueOnly();
+      }, 5000);
+    }
+
+    scheduleAutoRefresh();
+    refreshQueueOnly();
+
+    const searchForm = document.getElementById('search-form');
+    const sortByHidden = document.getElementById('sort-by-hidden');
+    const sortDirHidden = document.getElementById('sort-dir-hidden');
+    const docsSortBy = document.getElementById('docs-sort-by');
+    const docsSortDir = document.getElementById('docs-sort-dir');
+
+    function submitSearchWithSort() {
+      if (!searchForm || !sortByHidden || !sortDirHidden || !docsSortBy || !docsSortDir) return;
+      sortByHidden.value = docsSortBy.value;
+      sortDirHidden.value = docsSortDir.value;
+      saveDocsUiState();
+      searchForm.submit();
+    }
+
+    if (searchForm) {
+      searchForm.addEventListener('submit', () => {
+        saveDocsUiState();
+      });
+    }
+
+    if (docsSortBy) {
+      docsSortBy.addEventListener('change', submitSearchWithSort);
+    }
+    if (docsSortDir) {
+      docsSortDir.addEventListener('change', submitSearchWithSort);
+    }
+
+    function toggleRowById(_event, id) {
+      const detail = document.getElementById('detail-' + id);
+      if (!detail) return;
+      detail.hidden = !detail.hidden;
+      saveDocsUiState();
+    }
+
+    function toggleRowByKey(event, id) {
+      if (event.key !== 'Enter' && event.key !== ' ') return;
+      event.preventDefault();
+      toggleRowById(event, id);
+    }
+
+    document.querySelectorAll('.doc-row a, .doc-row button, .doc-row input, .doc-row select, .doc-row textarea, .doc-row label').forEach((el) => {
+      el.addEventListener('click', (ev) => ev.stopPropagation());
+    });
+
+    document.querySelectorAll('.doc-detail-row a, .doc-detail-row button, .doc-detail-row input, .doc-detail-row select, .doc-detail-row textarea, .doc-detail-row label').forEach((el) => {
+      el.addEventListener('click', (ev) => ev.stopPropagation());
+    });
+
+    const selectAllDocs = document.getElementById('select-all-docs');
+    const bulkSelectedCount = document.getElementById('bulk-selected-count');
+    const bulkMoveForm = document.getElementById('bulk-move-form');
+    const bulkTargetUser = document.getElementById('bulk-target-user');
+    const docsExpandAllBtn = document.getElementById('docs-expand-all');
+    const docsCollapseAllBtn = document.getElementById('docs-collapse-all');
+    const filesExpandBtn = document.getElementById('files-expand');
+    const filesCollapseBtn = document.getElementById('files-collapse');
+    const documentsTableWrap = document.getElementById('documents-table-wrap');
+
+    function selectedDocCheckboxes() {
+      return Array.from(document.querySelectorAll('.doc-select'));
+    }
+
+    function currentTargetInbox() {
+      if (!bulkTargetUser) return '';
+      return String(bulkTargetUser.value || '').trim();
+    }
+
+    function shouldSelectForTarget(cb, target) {
+      const owner = String(cb.dataset.inboxUser || '').trim();
+      if (!target) {
+        return true;
+      }
+      if (target === 'generic') {
+        return owner !== '';
+      }
+      return owner.toLowerCase() !== target.toLowerCase();
+    }
+
+    function updateSelectedCount() {
+      const selectedCount = selectedDocCheckboxes().filter((cb) => cb.checked).length;
+      if (bulkSelectedCount) {
+        bulkSelectedCount.textContent = `${selectedCount} selected`;
+      }
+      if (selectAllDocs) {
+        const all = selectedDocCheckboxes();
+        const allChecked = all.length > 0 && all.every((cb) => cb.checked);
+        selectAllDocs.checked = allChecked;
+      }
+    }
+
+    selectedDocCheckboxes().forEach((cb) => {
+      cb.addEventListener('change', updateSelectedCount);
+    });
+
+    if (selectAllDocs) {
+      selectAllDocs.addEventListener('change', () => {
+        const checked = !!selectAllDocs.checked;
+        const target = currentTargetInbox();
+        selectedDocCheckboxes().forEach((cb) => {
+          cb.checked = checked ? shouldSelectForTarget(cb, target) : false;
+        });
+        updateSelectedCount();
+      });
+    }
+
+    if (bulkTargetUser) {
+      bulkTargetUser.addEventListener('change', () => {
+        if (!selectAllDocs || !selectAllDocs.checked) {
+          updateSelectedCount();
+          return;
+        }
+        const target = currentTargetInbox();
+        selectedDocCheckboxes().forEach((cb) => {
+          cb.checked = shouldSelectForTarget(cb, target);
+        });
+        updateSelectedCount();
+      });
+    }
+
+    if (bulkMoveForm) {
+      bulkMoveForm.addEventListener('submit', (ev) => {
+        const selectedCount = selectedDocCheckboxes().filter((cb) => cb.checked).length;
+        if (!bulkTargetUser || !bulkTargetUser.value) {
+          ev.preventDefault();
+          alert('Choose a destination inbox first.');
+          return;
+        }
+        if (selectedCount === 0) {
+          ev.preventDefault();
+          alert('Select at least one document.');
+          return;
+        }
+      });
+    }
+
+    updateSelectedCount();
+
+    function setAllDocRows(expanded) {
+      document.querySelectorAll('.doc-detail-row').forEach((row) => {
+        row.hidden = !expanded;
+      });
+    }
+
+    if (docsExpandAllBtn) {
+      docsExpandAllBtn.addEventListener('click', () => {
+        setAllDocRows(true);
+        saveDocsUiState();
+      });
+    }
+    if (docsCollapseAllBtn) {
+      docsCollapseAllBtn.addEventListener('click', () => {
+        setAllDocRows(false);
+        saveDocsUiState();
+      });
+    }
+
+    if (filesExpandBtn && documentsTableWrap) {
+      filesExpandBtn.addEventListener('click', () => {
+        documentsTableWrap.hidden = false;
+        saveDocsUiState();
+      });
+    }
+
+    if (filesCollapseBtn && documentsTableWrap) {
+      filesCollapseBtn.addEventListener('click', () => {
+        documentsTableWrap.hidden = true;
+        saveDocsUiState();
+      });
+    }
+
+    const docsUiState = loadDocsUiState();
+    if (documentsTableWrap) {
+      if (typeof docsUiState.filesListOpen === 'boolean') {
+        documentsTableWrap.hidden = !docsUiState.filesListOpen;
+      } else {
+        documentsTableWrap.hidden = true;
+      }
+    }
+
+    if (Array.isArray(docsUiState.expandedRelPaths) && docsUiState.expandedRelPaths.length > 0) {
+      const wanted = new Set(docsUiState.expandedRelPaths.map((x) => String(x)));
+      document.querySelectorAll('.doc-row').forEach((row) => {
+        const id = row.dataset.rowId;
+        const rel = row.dataset.relPath || '';
+        if (!id || !rel || !wanted.has(rel)) return;
+        const detail = document.getElementById('detail-' + id);
+        if (detail) {
+          detail.hidden = false;
+        }
+      });
+    } else {
+      // First load default: details collapsed.
+      setAllDocRows(false);
+    }
+
+    const treeFilter = document.getElementById('tree-filter');
+    const treeExpandAllBtn = document.getElementById('tree-expand-all');
+    const treeCollapseAllBtn = document.getElementById('tree-collapse-all');
+
+    function setAllTreeNodes(open) {
+      document.querySelectorAll('.tree-wrap .tree-node').forEach((node) => {
+        node.open = open;
+      });
+    }
+
+    if (treeExpandAllBtn) {
+      treeExpandAllBtn.addEventListener('click', () => setAllTreeNodes(true));
+    }
+    if (treeCollapseAllBtn) {
+      treeCollapseAllBtn.addEventListener('click', () => setAllTreeNodes(false));
+    }
+
+    function applyTreeFilter() {
+      if (!treeFilter) return;
+      const q = treeFilter.value.trim().toLowerCase();
+      const treeRoot = document.querySelector('.tree-wrap');
+      if (!treeRoot) return;
+
+      const allLists = Array.from(treeRoot.querySelectorAll('.tree-list')).reverse();
+      allLists.forEach((ul) => {
+        const items = ul.querySelectorAll(':scope > li');
+        items.forEach((li) => {
+          const fileLink = li.querySelector(':scope > .tree-file');
+          const details = li.querySelector(':scope > .tree-node');
+
+          if (fileLink) {
+            const txt = (fileLink.textContent || '').toLowerCase();
+            li.hidden = !(q === '' || txt.includes(q));
+            return;
+          }
+
+          if (!details) return;
+          const summary = details.querySelector(':scope > summary');
+          const ownTxt = (summary ? summary.textContent : '').toLowerCase();
+          const visibleChildren = details.querySelectorAll(':scope > .tree-list > li:not([hidden])').length;
+          const ownMatch = q === '' || ownTxt.includes(q);
+          const show = ownMatch || visibleChildren > 0;
+          li.hidden = !show;
+          if (q) {
+            details.open = show;
+          }
+        });
+      });
+    }
+
+    if (treeFilter) {
+      treeFilter.addEventListener('input', applyTreeFilter);
+    }
+
+    const setupModal = document.getElementById('setup-modal');
+    const openSetupBtn = document.getElementById('open-setup');
+    const closeSetupBtn = document.getElementById('close-setup');
+
+    function setSetupOpen(open) {
+      if (!setupModal) return;
+      setupModal.hidden = !open;
+      document.body.classList.toggle('no-scroll', open);
+    }
+
+    if (openSetupBtn) {
+      openSetupBtn.addEventListener('click', () => setSetupOpen(true));
+    }
+    if (closeSetupBtn) {
+      closeSetupBtn.addEventListener('click', () => setSetupOpen(false));
+    }
+    if (setupModal) {
+      setupModal.querySelectorAll('[data-close-setup="1"]').forEach((el) => {
+        el.addEventListener('click', () => setSetupOpen(false));
+      });
+      document.addEventListener('keydown', (ev) => {
+        if (ev.key === 'Escape') setSetupOpen(false);
+      });
+    }
+
+  </script>
+</body>
+</html>

@@ -1,0 +1,83 @@
+paths:
+  inbox: /opt/scanner-filer/inbox
+  processing: /opt/scanner-filer/processing
+  # Set review/archive/rejected to a NAS mount path if desired, or keep local:
+  review: /opt/scanner-filer/review
+  archive: /opt/scanner-filer/archive
+  rejected: /opt/scanner-filer/rejected
+  state: /opt/scanner-filer/state
+
+ocr:
+  enabled: true
+  command: ocrmypdf
+  language: eng
+  skip_text: true
+  rotate_pages: true
+  deskew: true
+  clean: false
+  extra_args: ""
+
+llm:
+  enabled: true
+  timeout_seconds: 240
+  max_input_chars: 2800
+  min_confidence_autofile: 0.60
+  # Optional extra instructions for edge cases (for example: "MOT certificates are vehicles, never invoice")
+  classification_guidance: ""
+  # llama.cpp mode: keep {prompt} exactly as-is.
+  # Option A – Ollama (recommended, no JSON schema flag needed):
+  # command_template: ollama run qwen2.5:3b-instruct
+  #
+  # Option B – llama.cpp binary:
+  command_template: >-
+    /opt/llama.cpp/build/bin/llama-completion
+    -m /opt/models/Qwen2.5-1.5B-Instruct-Q4_K_M.gguf
+    -n 128
+    --temp 0
+    --ctx-size 2048
+    --json-schema '{"type":"object","required":["doc_type","vendor_or_sender","date","tags","confidence","reason"],"properties":{"doc_type":{"type":"string"},"vendor_or_sender":{"type":"string"},"date":{"type":"string"},"tags":{"type":"array","items":{"type":"string"}},"confidence":{"type":"number"},"reason":{"type":"string"}}}'
+    -p "{prompt}"
+
+splitter:
+  enabled: true
+  min_pages_to_split: 3
+  max_first_page_chars: 700
+  boundary_keywords:
+    - statement
+    - invoice
+    - receipt
+    - policy
+    - council tax
+    - pension
+    - account number
+    - patient
+
+rules:
+  allowed_doc_types:
+    - council_tax
+    - bank_statement
+    - pension
+    - utility_bill
+    - insurance
+    - tax
+    - medical
+    - payslip
+    - invoice
+    - receipt
+    - legal
+    - personal
+    - unknown
+  unknown_doc_type: unknown
+  # Force category if phrase appears in extracted text.
+  keyword_overrides: {}
+  # If a document was classified as type X, but one of these keywords appears,
+  # classification is downgraded to unknown for manual review.
+  negative_type_keywords: {}
+  # Optional category-specific confidence thresholds for auto-filing.
+  per_type_min_confidence: {}
+
+poll_seconds: 5
+inbox_settle_seconds: 90
+require_size_stability: true
+stable_cycles_required: 2
+log_level: INFO
