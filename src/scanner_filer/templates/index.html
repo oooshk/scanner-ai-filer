@@ -419,10 +419,13 @@
           {% for d in documents %}
           <tr class="doc-row {% if d.auto_filed_recent %}doc-row-autofile{% endif %}" data-row-id="{{ loop.index0 }}" onclick="toggleRowById(event, '{{ loop.index0 }}')" role="button" tabindex="0" onkeydown="toggleRowByKey(event, '{{ loop.index0 }}')">
             <td>
-              <input type="checkbox" class="doc-select" name="selected" value="{{ d.bucket }}|{{ d.rel_path }}">
+              <input type="checkbox" class="doc-select" data-inbox-user="{{ d.inbox_user }}" name="selected" value="{{ d.bucket }}|{{ d.rel_path }}">
             </td>
             <td>
               <span class="chip chip-{{ d.bucket }}">{{ d.bucket }}</span>
+              {% if d.inbox_user %}
+              <span class="chip chip-inbox" title="Currently in {{ d.inbox_user }} inbox">{{ d.inbox_user }}</span>
+              {% endif %}
               {% if d.auto_filed_recent %}
               <span class="chip chip-autofile" title="Auto-filed at {{ d.auto_filed_iso }}">auto-filed</span>
               {% endif %}
@@ -614,6 +617,22 @@
       return Array.from(document.querySelectorAll('.doc-select'));
     }
 
+    function currentTargetInbox() {
+      if (!bulkTargetUser) return '';
+      return String(bulkTargetUser.value || '').trim();
+    }
+
+    function shouldSelectForTarget(cb, target) {
+      const owner = String(cb.dataset.inboxUser || '').trim();
+      if (!target) {
+        return true;
+      }
+      if (target === 'generic') {
+        return owner !== '';
+      }
+      return owner.toLowerCase() !== target.toLowerCase();
+    }
+
     function updateSelectedCount() {
       const selectedCount = selectedDocCheckboxes().filter((cb) => cb.checked).length;
       if (bulkSelectedCount) {
@@ -633,8 +652,23 @@
     if (selectAllDocs) {
       selectAllDocs.addEventListener('change', () => {
         const checked = !!selectAllDocs.checked;
+        const target = currentTargetInbox();
         selectedDocCheckboxes().forEach((cb) => {
-          cb.checked = checked;
+          cb.checked = checked ? shouldSelectForTarget(cb, target) : false;
+        });
+        updateSelectedCount();
+      });
+    }
+
+    if (bulkTargetUser) {
+      bulkTargetUser.addEventListener('change', () => {
+        if (!selectAllDocs || !selectAllDocs.checked) {
+          updateSelectedCount();
+          return;
+        }
+        const target = currentTargetInbox();
+        selectedDocCheckboxes().forEach((cb) => {
+          cb.checked = shouldSelectForTarget(cb, target);
         });
         updateSelectedCount();
       });

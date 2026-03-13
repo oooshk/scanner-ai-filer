@@ -540,6 +540,12 @@ th {
   margin-left: 6px;
 }
 
+.chip-inbox {
+  background: #dbeafe;
+  color: #1e3a8a;
+  margin-left: 6px;
+}
+
 .chip-archive { background: #d2f5ea; color: #0e5b4f; }
 .chip-review { background: #ffe7be; color: var(--warn); }
 .chip-rejected { background: #ffd9d6; color: #9f1d1d; }

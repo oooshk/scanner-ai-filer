@@ -44,6 +44,7 @@ class DocumentRecord:
     keywords: list[str]
     suggested_type: str
     target_default_type: str
+    inbox_user: str
     auto_filed_recent: bool
     auto_filed_iso: str
 
@@ -174,6 +175,7 @@ def _scan_bucket(cfg: AppConfig, root: Path, bucket: str, rel_prefix: str = "") 
                 keywords=[],
                 suggested_type="",
                 target_default_type=doc_type,
+                inbox_user="",
                 auto_filed_recent=False,
                 auto_filed_iso="",
             )
@@ -218,6 +220,13 @@ def collect_documents(cfg: AppConfig) -> list[DocumentRecord]:
         seen_docs.add(key)
         deduped.append(doc)
     docs = deduped
+
+    known_users = {str(name).strip() for name in _load_user_inboxes(cfg).keys() if str(name).strip()}
+    for doc in docs:
+        parts = Path(doc.rel_path).parts
+        if parts and parts[0] in known_users:
+            doc.inbox_user = parts[0]
+
     _attach_keywords(cfg, docs)
     _attach_recent_autofile_status(cfg, docs)
     allowed = cfg.rules.allowed_doc_types
