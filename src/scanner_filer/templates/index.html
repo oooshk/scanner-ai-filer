@@ -15,16 +15,259 @@
           <p>Monitor queue activity, browse folders, and manage filing decisions across archive, review, and rejected.</p>
         </div>
         <div class="hero-actions">
-          <form method="post" action="/logout" class="inline-category-form">
+          <button type="button" id="open-help" class="help-launch">&#10067; Help</button>
+          {% if setup_enabled %}
+          <button type="button" id="open-setup" class="setup-launch">&#9881; Setup</button>
+          {% endif %}
+          <form method="post" action="/logout" class="inline-form-bare">
             <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
             <button type="submit">Log Out</button>
           </form>
-          {% if setup_enabled %}
-          <button type="button" id="open-setup" class="setup-launch">Setup</button>
-          {% endif %}
         </div>
       </div>
     </header>
+
+    <div id="help-modal" class="setup-modal" hidden>
+      <div class="setup-modal-backdrop" data-close-help="1"></div>
+      <section class="setup-wrap setup-modal-panel help-panel">
+        <div class="setup-modal-head">
+          <h2>&#10067; Help &amp; Reference</h2>
+          <button type="button" id="close-help" class="setup-close">Close</button>
+        </div>
+
+        <details class="setup-block" open>
+          <summary>System Overview</summary>
+          <div class="help-body">
+            <p>This is the <strong>Home Document Ops Hub</strong> — a self-hosted PDF document pipeline running on a Raspberry Pi. It watches a scanner inbox folder, automatically OCRs, classifies, splits, and files every PDF that arrives.</p>
+            <p>Documents flow through three stages:</p>
+            <ol>
+              <li><strong>Inbox / Queue</strong> — raw scan lands here from your scanner or network share. Waits for the file to settle (configurable), then enters processing.</li>
+              <li><strong>Processing</strong> — OCR is applied, pages are analysed for split points, the document is classified by type (invoice, pension, vehicle, etc.) and a sender is extracted. The result is filed automatically.</li>
+              <li><strong>Archive / Review / Rejected</strong> — the final resting place. <em>Archive</em> = confidently filed. <em>Review</em> = needs a human decision (low confidence or unknown type). <em>Rejected</em> = failed to process.</li>
+            </ol>
+          </div>
+        </details>
+
+        <details class="setup-block">
+          <summary>Processing Queue Panel</summary>
+          <div class="help-body">
+            <p>The queue panel shows every file currently waiting or being processed in real time (updates every 5 seconds automatically).</p>
+            <ul>
+              <li><strong>waiting_for_settle</strong> — file has arrived in the inbox but is still within the settle period. This prevents processing half-written files from slow scanners.</li>
+              <li><strong>processing</strong> — file is actively being OCR'd and classified right now.</li>
+              <li><strong>stuck (Nm)</strong> — file has been in the processing folder for more than 5 minutes without progress. This usually means the scanner-filer service crashed mid-job.</li>
+              <li><strong>orphaned_processing</strong> — file is in the processing folder but no active job is currently running against it (recently stopped).</li>
+            </ul>
+            <p><strong>&#9851; Rescue Stuck Files</strong> — moves all stuck/orphaned files back to the inbox so they are automatically reprocessed. The actively-processing file (if any) is always skipped. Use this if a file appears stuck for more than 10 minutes.</p>
+            <p>When the queue empties after having items, the page reloads automatically to refresh the document list and tree.</p>
+          </div>
+        </details>
+
+        <details class="setup-block">
+          <summary>Directory Tree</summary>
+          <div class="help-body">
+            <p>A live browsable folder view of all files across Archive, Review, and Rejected. Mirrors exactly what is on disk.</p>
+            <ul>
+              <li><strong>Expand All / Collapse All</strong> — open or close all folder nodes at once.</li>
+              <li><strong>Filter box</strong> — instantly hides any tree branches that don't match the typed text. Clears when empty.</li>
+              <li><strong>&#128196; Open</strong> — opens the PDF directly in a new browser tab.</li>
+              <li><strong>&#128269; (magnifier)</strong> — locates the file in the Document List below, scrolls to it, expands its detail row, and briefly highlights it in yellow.</li>
+            </ul>
+            <p>Archive folder structure is: <code>type / year / sender / filename.pdf</code> (or <code>username / type / year / sender / filename.pdf</code> for per-user inboxes).</p>
+          </div>
+        </details>
+
+        <details class="setup-block">
+          <summary>Document List</summary>
+          <div class="help-body">
+            <p>A searchable, sortable table of every document in Archive, Review, and Rejected.</p>
+            <h4>Search &amp; Filter</h4>
+            <ul>
+              <li>The search box matches against filename, folder path, sender, category, and keywords.</li>
+              <li>The <strong>bucket filter</strong> dropdown limits results to Archive, Review, or Rejected only.</li>
+              <li><strong>Sort</strong> options: Time Received, Last Processed, Folder Location, Category, Sender, Size, Filename, <strong>Status</strong> (Review first, then Rejected, then Archive).</li>
+            </ul>
+            <h4>Status Chips</h4>
+            <ul>
+              <li><span style="background:#d2f5ea;color:#0e5b4f;padding:2px 7px;border-radius:9px;font-size:12px;font-weight:600;">archive</span> — filed and complete.</li>
+              <li><span style="background:#e03131;color:#fff;padding:2px 7px;border-radius:9px;font-size:12px;font-weight:700;">review</span> — needs your attention. Classification was uncertain or unknown.</li>
+              <li><span style="background:#ffd9d6;color:#9f1d1d;padding:2px 7px;border-radius:9px;font-size:12px;font-weight:600;">rejected</span> — processing failed.</li>
+              <li><span style="background:#dbeafe;color:#1e3a8a;padding:2px 7px;border-radius:9px;font-size:12px;font-weight:600;">username</span> — document belongs to a specific user inbox.</li>
+              <li><span style="background:#f59f00;color:#111;padding:2px 7px;border-radius:9px;font-size:12px;font-weight:600;">auto-filed</span> — was archived automatically by the pipeline in the last 7 days.</li>
+            </ul>
+            <h4>Expanding a Row</h4>
+            <p>Click any row to expand its detail panel. Click again to collapse.</p>
+            <h4>Bulk Actions</h4>
+            <p>Use the checkboxes on the left to select multiple files. Then:</p>
+            <ul>
+              <li><strong>Transfer Selected</strong> — moves all selected files to the chosen inbox user's archive (or the default archive). Requires selecting a destination inbox from the dropdown.</li>
+              <li><strong>Reclassify Selected</strong> — sends all selected files back to the inbox for fresh classification from scratch. No inbox selection needed.</li>
+              <li><strong>Select all visible</strong> checkbox — selects every visible row at once.</li>
+            </ul>
+          </div>
+        </details>
+
+        <details class="setup-block">
+          <summary>Document Detail Actions (expanded row)</summary>
+          <div class="help-body">
+            <h4>Keywords</h4>
+            <p>Each document has a set of automatically extracted keywords derived from its OCR text. These are used for search and can influence re-classification. You can edit them manually and click <strong>Save Keywords</strong> — your manual keywords take priority over automatically extracted ones and persist across reprocessing.</p>
+
+            <h4>Move (Learn)</h4>
+            <p>Moves the file to the Archive with the category, year, and sender you specify. This is the primary way to <em>correct</em> a wrong classification. When you move a file:</p>
+            <ul>
+              <li>A <strong>manual learning record</strong> is saved — next time a document with similar keywords arrives, it will be matched against this record and classified the same way.</li>
+              <li>Any strong, specific keywords from the document are <strong>injected into the keyword override rules</strong>, so the classifier will recognise the same pattern in future without needing an LLM call.</li>
+            </ul>
+            <p>Learning can be disabled globally in Setup → AI Filing Behaviour.</p>
+            <p><em>Tip: leave the sender field blank if unknown — it will be filled as "unknown" in the folder path.</em></p>
+
+            <h4>Add Category</h4>
+            <p>Adds a new document type/category to the allowed list so the AI can classify future documents into it. The category name must be lowercase letters, numbers, or underscores (2–40 chars). Takes effect immediately for the UI; restart the scanner-filer service to use it in classification.</p>
+
+            <h4>Split + Reprocess</h4>
+            <p>Splits the PDF at the page numbers you specify (1-based, comma-separated, e.g. <code>1,4,7</code>) and sends each part back to the inbox for independent reprocessing. Use this when the scanner has merged multiple documents into one PDF. Each part is processed separately and filed according to its own content.</p>
+
+            <h4>Reclassify</h4>
+            <p>Sends the file back to the inbox to be reprocessed from scratch — OCR, classification, and filing all run again. Any manual learning records and keyword overrides learned from previous moves will be applied. Use this after fixing keyword overrides or category rules to apply them to an existing document.</p>
+
+            <h4>Delete</h4>
+            <p>Permanently deletes the file from disk. This cannot be undone. A confirmation dialog is shown before deletion.</p>
+          </div>
+        </details>
+
+        <details class="setup-block">
+          <summary>AI Classification &amp; Learning</summary>
+          <div class="help-body">
+            <p>The classification pipeline runs in this order:</p>
+            <ol>
+              <li><strong>Manual learning check</strong> — if a previous manual move produced a strong keyword overlap (&ge;0.75) with this document, that classification is used directly (no LLM call).</li>
+              <li><strong>Keyword override rules</strong> — if any phrase from the document exactly matches a configured override (e.g. <code>"mot test certificate" → vehicles</code>), that type is applied directly.</li>
+              <li><strong>Negative keyword filter</strong> — configured negative keywords can block a type from being assigned even if other signals suggest it.</li>
+              <li><strong>LLM classification</strong> — the local Qwen2.5 model reads the first portion of the OCR text and outputs a document type and confidence score.</li>
+              <li><strong>Public knowledge assist</strong> — if enabled, scans for ALL-CAPS acronyms (e.g. pension scheme names, agencies, insurers) and checks your configured <em>Acronym Override Map</em> (local/offline). This maps known acronyms directly to document types.</li>
+              <li><strong>Fallback</strong> — if confidence is below threshold, the document is sent to Review.</li>
+            </ol>
+            <h4>Confidence Threshold</h4>
+            <p>Set in Setup → AI Filing Behaviour. Documents with a confidence score below this value go to Review instead of Archive.</p>
+            <h4>Public Acronym Options (Important Difference)</h4>
+            <ul>
+              <li><strong>Enable public acronym knowledge assist</strong> — turns on acronym detection and local acronym mapping only. No internet required. Safe default if you want privacy-first behaviour.</li>
+              <li><strong>Allow online acronym lookup (token-only)</strong> — optional extra fallback used only when local mapping does not resolve an acronym. Sends just the acronym token (for example <code>ABCP</code>) to the Wikipedia summary API, never OCR text or document content.</li>
+            </ul>
+            <p><strong>Recommended:</strong> keep knowledge assist ON, keep online lookup OFF by default, and add your frequent acronyms to the local override map for fastest and most predictable results.</p>
+            <h4>Keyword Extraction Settings</h4>
+            <ul>
+              <li><strong>Max OCR chars</strong> — how much of the OCR text is analysed for keyword extraction (default 5000).</li>
+              <li><strong>Keyword/phrase count</strong> — maximum number of keywords stored per document (default 24).</li>
+              <li><strong>Include phrases</strong> — if enabled, 2- and 3-word phrases are extracted alongside single words (weighted higher).</li>
+              <li><strong>Infer year from text</strong> — scans OCR text for the most common year reference and uses it as the default move year.</li>
+            </ul>
+            <h4>Keyword Override Rules</h4>
+            <p>A JSON map of <code>"phrase": "type"</code> entries. If any phrase is found in a document's OCR text, the document is classified as that type with high confidence, bypassing the LLM. Example: <code>{"mot test certificate": "vehicles", "acronym_name": "pension"}</code>.</p>
+            <h4>Negative Keywords</h4>
+            <p>A JSON map of <code>"type": ["word1", "word2"]</code>. If a document would be classified as that type but any of those words appear in the text, the classification is rejected and the document goes to Review. Useful for preventing false positives.</p>
+          </div>
+        </details>
+
+        <details class="setup-block">
+          <summary>Setup: NAS &amp; Storage</summary>
+          <div class="help-body">
+            <ul>
+              <li><strong>NAS Host/Share</strong> — connect the Pi to your network-attached storage where archived documents are written.</li>
+              <li><strong>Mount Point</strong> — where the NAS share is mounted on the Pi filesystem (e.g. <code>/mnt/nas</code>).</li>
+              <li><strong>Subdir</strong> — subfolder inside the NAS share used as the root for all filing (e.g. <code>Home Filing</code>).</li>
+              <li><strong>Scanner Share</strong> — the Samba share on the Pi that your scanner deposits files into. The inbox folder watches this location.</li>
+              <li><strong>Inbox Settle Time</strong> — seconds to wait after a file appears before processing it. Prevents reading incomplete uploads from slow scanners.</li>
+            </ul>
+          </div>
+        </details>
+
+        <details class="setup-block">
+          <summary>Setup: User Inboxes</summary>
+          <div class="help-body">
+            <p>User inboxes allow multiple household members to have their own separate archive, review, and rejected folders on the NAS. Each user can have documents filed into their own directory structure independently.</p>
+            <ul>
+              <li><strong>Add User</strong> — creates a new user with their own NAS paths for archive, review, and rejected folders.</li>
+              <li><strong>Edit / Remove</strong> — update or delete a user's configuration.</li>
+              <li><strong>Samba Share</strong> — a dedicated Samba share can be created on the Pi for each user's scanner inbox, so a user's scanner uploads go directly into their queue.</li>
+            </ul>
+            <p>When transferring documents in bulk, select the destination user from the inbox dropdown in the bulk action bar.</p>
+          </div>
+        </details>
+
+        <details class="setup-block">
+          <summary>Setup: Runtime &amp; Engine</summary>
+          <div class="help-body">
+            <p>These controls tune processing cadence, stability checks, and model engine behavior.</p>
+            <ul>
+              <li><strong>poll_seconds</strong> — how often the watcher scans the inbox for new files.</li>
+              <li><strong>inbox_settle_seconds</strong> — minimum file age before processing starts.</li>
+              <li><strong>require_size_stability / stable_cycles_required</strong> — prevents processing files that are still growing on disk.</li>
+              <li><strong>LLM timeout / max input chars</strong> — controls model latency and prompt size.</li>
+              <li><strong>LLM/OCR enabled</strong> — hard on/off switches for classification and OCR engines.</li>
+              <li><strong>log level</strong> — DEBUG/INFO/WARNING/ERROR runtime verbosity.</li>
+            </ul>
+          </div>
+        </details>
+
+        <details class="setup-block">
+          <summary>Setup: Splitter</summary>
+          <div class="help-body">
+            <p>The splitter decides whether a multi-page PDF contains a single document or several documents that should be filed separately.</p>
+            <ul>
+              <li><strong>Min pages per split</strong> — a document part must have at least this many pages to be filed as a standalone document.</li>
+              <li><strong>Max pages per split</strong> — the maximum number of pages that can be grouped into a single document part.</li>
+              <li><strong>Boundary keywords</strong> — keywords that suggest the first page of a new document.</li>
+              <li><strong>Boundary score threshold</strong> — how different two adjacent pages need to be (0.0–1.0) to be treated as a document boundary when content-aware splitting is enabled.</li>
+              <li><strong>Low similarity threshold</strong> — lower threshold used to force splits when adjacent pages share very little text overlap.</li>
+              <li><strong>Content-aware splitting</strong> — uses text similarity between pages to detect where one document ends and another begins, rather than always splitting at fixed page counts.</li>
+            </ul>
+            <p><strong>Manual Split</strong> (in document detail) lets you override automatic splitting for a specific file by specifying the exact page numbers where splits should occur.</p>
+          </div>
+        </details>
+
+        <details class="setup-block">
+          <summary>Setup: Security &amp; Accounts</summary>
+          <div class="help-body">
+            <p>Controls login access to this web interface.</p>
+            <ul>
+              <li><strong>Add Account</strong> — creates a new username/password for the web UI. Passwords are stored hashed.</li>
+              <li><strong>Remove Account</strong> — revokes access for a user. You cannot remove the last remaining admin account.</li>
+            </ul>
+            <p>The web UI uses session cookies. Sessions expire after closing the browser or after a configurable timeout.</p>
+          </div>
+        </details>
+
+        <details class="setup-block">
+          <summary>Backup &amp; Restore</summary>
+          <div class="help-body">
+            <p>The <strong>Download Backup</strong> option creates a <code>.tar.gz</code> archive containing:</p>
+            <ul>
+              <li>Your <code>config.yaml</code> (all settings)</li>
+              <li>The <code>state/</code> folder (manual learning records, keyword index, event log, rules)</li>
+              <li>The <code>runtime/processing/</code> folder (any files currently being processed)</li>
+            </ul>
+            <p>The <strong>Restore</strong> option uploads a previously downloaded backup and replaces the current config and state. The service restarts automatically after restore. Document files themselves (archive/review/rejected) are <em>not</em> included in the backup — these live on the NAS.</p>
+          </div>
+        </details>
+
+        <details class="setup-block">
+          <summary>Tips &amp; Troubleshooting</summary>
+          <div class="help-body">
+            <ul>
+              <li><strong>High unknown/review rate</strong> — check your keyword override rules. Short common words like "car", "total", "act" cause false positives. Keep overrides to specific, precise phrases.</li>
+              <li><strong>File stuck in processing</strong> — use <strong>&#9851; Rescue Stuck Files</strong> in the Queue panel to move it back to inbox.</li>
+              <li><strong>Wrong classification corrected by Move (Learn)</strong> — the system records your correction. Future documents with similar content will be classified the same way automatically.</li>
+              <li><strong>Acronyms not recognised</strong> — add them to the <em>Acronym Override Map</em> in Setup → AI Filing Behaviour (e.g. <code>{"acronym_name": "pension"}</code>).</li>
+              <li><strong>Document split incorrectly</strong> — use Split + Reprocess in the document detail to manually specify the correct page boundaries.</li>
+              <li><strong>Services</strong> — two systemd services run the system: <code>scanner-filer</code> (background watcher/processor) and <code>scanner-filer-web</code> (this web interface). Both must be active for full functionality.</li>
+            </ul>
+          </div>
+        </details>
+
+      </section>
+    </div>
 
     {% if msg %}
       <div class="notice">{{ msg }}</div>
@@ -48,7 +291,7 @@
           <h2>Setup</h2>
           <button type="button" id="close-setup" class="setup-close">Close</button>
         </div>
-        <p class="muted">Use these sections to configure: 1) NAS destination storage, 2) Pi scanner upload shares, 3) user accounts, and 4) AI filing behavior.</p>
+          <p class="muted">Use these sections to configure NAS storage, scanner shares, user inboxes, runtime/engine behavior, splitter tuning, security accounts, and AI filing behavior.</p>
 
         <details class="setup-block" open>
           <summary>NAS Samba Setup</summary>
@@ -84,7 +327,7 @@
           <summary>User Inboxes</summary>
           <p class="muted">Create one scanner inbox per person. Each person can have their own NAS login and own destination filing root.</p>
           <p class="muted">Field guide: NAS Share Name is the remote NAS share (often "Public"). Subdirectory is the folder inside that share (for example "Home Filing"). Apply User Inboxes below creates Samba shares on the Pi for scanner uploads.</p>
-          <p class="muted">Important: the Samba username for each Pi scanner share is the inbox name (for example Rob -> scanner_Rob with username Rob). The Samba password here is for those Pi shares and is separate from web login account passwords.</p>
+          <p class="muted">Important: the Samba username for each Pi scanner share is the inbox name (for example user_a -> scanner_user_a with username user_a). The Samba password here is for those Pi shares and is separate from web login account passwords.</p>
           <div id="user-inboxes-list">
             <p>Loading inboxes...</p>
           </div>
@@ -279,6 +522,48 @@
         </details>
 
         <details class="setup-block">
+          <summary>Runtime &amp; Engine</summary>
+          <p class="muted">Tune watcher timing, stability checks, and model runtime controls.</p>
+          <form method="post" action="/setup/runtime" class="setup-form">
+            <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+            <input type="hidden" name="next" value="{{ return_query }}">
+            <input type="number" min="1" max="60" step="1" name="poll_seconds" value="{{ setup_defaults.poll_seconds }}" placeholder="Watcher poll interval (seconds)">
+            <input type="number" min="0" max="600" step="1" name="inbox_settle_seconds" value="{{ setup_defaults.inbox_settle_seconds }}" placeholder="Inbox settle delay (seconds)">
+            <label class="checkline"><input type="checkbox" name="require_size_stability" {% if setup_defaults.require_size_stability %}checked{% endif %}> Require file size stability before processing</label>
+            <input type="number" min="1" max="10" step="1" name="stable_cycles_required" value="{{ setup_defaults.stable_cycles_required }}" placeholder="Stable cycles required">
+            <label class="checkline"><input type="checkbox" name="ocr_enabled" {% if setup_defaults.ocr_enabled %}checked{% endif %}> Enable OCR engine</label>
+            <label class="checkline"><input type="checkbox" name="llm_enabled" {% if setup_defaults.llm_enabled %}checked{% endif %}> Enable LLM classifier</label>
+            <input type="number" min="30" max="1200" step="5" name="llm_timeout_seconds" value="{{ setup_defaults.llm_timeout_seconds }}" placeholder="LLM timeout (seconds)">
+            <input type="number" min="600" max="20000" step="100" name="llm_max_input_chars" value="{{ setup_defaults.llm_max_input_chars }}" placeholder="LLM max input chars">
+            <textarea name="llm_command_template" rows="3" placeholder="LLM command template">{{ setup_defaults.llm_command_template }}</textarea>
+            <select name="log_level">
+              <option value="DEBUG" {% if setup_defaults.log_level == 'DEBUG' %}selected{% endif %}>Log level: DEBUG</option>
+              <option value="INFO" {% if setup_defaults.log_level == 'INFO' %}selected{% endif %}>Log level: INFO</option>
+              <option value="WARNING" {% if setup_defaults.log_level == 'WARNING' %}selected{% endif %}>Log level: WARNING</option>
+              <option value="ERROR" {% if setup_defaults.log_level == 'ERROR' %}selected{% endif %}>Log level: ERROR</option>
+            </select>
+            <button type="submit">Save Runtime/Engine Settings</button>
+          </form>
+        </details>
+
+        <details class="setup-block">
+          <summary>Splitter</summary>
+          <p class="muted">Configure automatic page-boundary detection for multi-page PDFs.</p>
+          <form method="post" action="/splitter-settings" class="setup-form">
+            <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+            <input type="hidden" name="next" value="{{ return_query }}">
+            <label class="checkline"><input type="checkbox" name="splitter_enabled" {% if setup_defaults.splitter_enabled %}checked{% endif %}> Enable splitter</label>
+            <input type="number" min="2" max="40" step="1" name="min_pages_to_split" value="{{ setup_defaults.splitter_min_pages_to_split }}" placeholder="Min pages before split">
+            <input type="number" min="200" max="8000" step="50" name="max_first_page_chars" value="{{ setup_defaults.splitter_max_first_page_chars }}" placeholder="Max first-page chars analysed">
+            <textarea name="boundary_keywords" rows="3" placeholder="Comma-separated boundary keywords">{{ setup_defaults.splitter_boundary_keywords }}</textarea>
+            <label class="checkline"><input type="checkbox" name="content_aware_enabled" {% if setup_defaults.splitter_content_aware_enabled %}checked{% endif %}> Enable content-aware splitting</label>
+            <input type="number" min="0.4" max="2.0" step="0.01" name="boundary_score_threshold" value="{{ setup_defaults.splitter_boundary_score_threshold }}" placeholder="Boundary score threshold">
+            <input type="number" min="0.05" max="0.8" step="0.01" name="low_similarity_threshold" value="{{ setup_defaults.splitter_low_similarity_threshold }}" placeholder="Low similarity threshold">
+            <button type="submit">Save Splitter Settings</button>
+          </form>
+        </details>
+
+        <details class="setup-block">
           <summary>AI Filing Behavior</summary>
           <p class="muted">Tune how strict auto-filing is and add instructions for tricky document types (for example: "MOT certificates should be vehicles, never invoice").</p>
           <form method="post" action="/setup/ai" class="setup-form">
@@ -295,6 +580,14 @@
             <label class="checkline"><input type="checkbox" name="ocr_deskew" {% if setup_defaults.ocr_deskew %}checked{% endif %}> OCR deskew pages</label>
             <label class="checkline"><input type="checkbox" name="ocr_clean" {% if setup_defaults.ocr_clean %}checked{% endif %}> OCR clean noisy scans</label>
             <input type="text" name="ocr_extra_args" value="{{ setup_defaults.ocr_extra_args }}" placeholder="Additional OCR CLI args (optional)">
+            <input type="number" min="1200" max="20000" step="100" name="keyword_extract_max_chars" value="{{ setup_defaults.keyword_extract_max_chars }}" placeholder="Keyword extraction max OCR chars">
+            <input type="number" min="8" max="80" step="1" name="keyword_extract_limit" value="{{ setup_defaults.keyword_extract_limit }}" placeholder="Keyword/phrase count per document">
+            <label class="checkline"><input type="checkbox" name="keyword_extract_include_phrases" {% if setup_defaults.keyword_extract_include_phrases %}checked{% endif %}> Include 2-3 word phrases in extracted keywords</label>
+            <label class="checkline"><input type="checkbox" name="infer_year_from_text" {% if setup_defaults.infer_year_from_text %}checked{% endif %}> Infer default move year from OCR text dates</label>
+            <label class="checkline"><input type="checkbox" name="learning_from_move_enabled" {% if setup_defaults.learning_from_move_enabled %}checked{% endif %}> Enable learning when moving documents</label>
+            <label class="checkline"><input type="checkbox" name="public_knowledge_enabled" {% if setup_defaults.public_knowledge_enabled %}checked{% endif %}> Enable public acronym knowledge assist (uses local acronym map only)</label>
+            <label class="checkline"><input type="checkbox" name="public_online_lookup_enabled" {% if setup_defaults.public_online_lookup_enabled %}checked{% endif %}> Allow online acronym lookup as fallback (sends acronym token only, never document text)</label>
+            <textarea name="public_acronym_overrides" rows="4" placeholder='JSON acronym->type, e.g. {"acronym_name":"pension"}'>{{ setup_defaults.public_acronym_overrides }}</textarea>
             <button type="submit">Save AI Tuning</button>
           </form>
         </details>
@@ -303,7 +596,13 @@
     {% endif %}
 
     <section class="queue-wrap">
-      <h2>Pending / Processing</h2>
+      <div class="queue-head">
+        <h2>Pending / Processing</h2>
+        <form method="post" action="/purge-processing" class="purge-form" onsubmit="return confirm('Move all stuck/orphaned files back to inbox for reprocessing?')">
+          <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+          <button type="submit" class="btn-rescue" title="Rescue files stuck in the processing folder back to inbox">&#9851; Rescue Stuck Files</button>
+        </form>
+      </div>
       <table class="queue-table" id="queue-table" {% if not queue_rows %}hidden{% endif %}>
         <thead>
           <tr>
@@ -349,7 +648,8 @@
           {% for n in nodes %}
           <li>
             {% if n.is_file %}
-              <a class="tree-file" href="{{ url_for('open_document', bucket=n.bucket, rel_path=n.rel_path) }}" target="_blank" rel="noopener" title="{{ n.rel_path }}">{{ n.name }}</a>
+              <span class="tree-file-name">{{ n.name }}</span> <a class="tree-file doc-open-link" href="{{ url_for('open_document', bucket=n.bucket, rel_path=n.rel_path) }}" target="_blank" rel="noopener" title="Open {{ n.rel_path }}">&#128196; Open</a>
+              <a class="tree-find-doc" href="#" data-rel-path="{{ n.rel_path }}" title="Locate in document list" aria-label="Locate in document list">&#128269;</a>
             {% else %}
               <details class="tree-node">
                 <summary>{{ n.name }}</summary>
@@ -374,6 +674,7 @@
       <form method="post" action="/move-inbox-bulk" class="bulk-move-form" id="bulk-move-form">
         <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
         <input type="hidden" name="next" value="{{ return_query }}">
+      </form>
         <div class="docs-head">
           <h2>Documents</h2>
           <div class="docs-head-actions">
@@ -384,14 +685,15 @@
         <div class="bulk-move-controls">
           <div class="bulk-controls-left">
             <label class="checkline"><input type="checkbox" id="select-all-docs"> Select all visible</label>
-            <select name="target_user" id="bulk-target-user">
+            <select name="target_user" id="bulk-target-user" form="bulk-move-form">
               <option value="">Move selected to user inbox...</option>
               <option value="generic">Generic inbox</option>
               {% for u in inbox_users %}
               <option value="{{ u }}">{{ u }}</option>
               {% endfor %}
             </select>
-            <button type="submit" id="bulk-move-submit">Transfer Selected</button>
+            <button type="submit" id="bulk-move-submit" form="bulk-move-form">Transfer Selected</button>
+            <button type="submit" id="bulk-reclassify-submit" formaction="/reclassify-bulk" formmethod="post" form="bulk-move-form">Reclassify Selected</button>
             <small class="muted" id="bulk-selected-count">0 selected</small>
           </div>
           <div class="bulk-controls-right">
@@ -403,6 +705,7 @@
               <option value="sender" {% if sort_by == 'sender' %}selected{% endif %}>Sort: Sender</option>
               <option value="size" {% if sort_by == 'size' %}selected{% endif %}>Sort: Size</option>
               <option value="name" {% if sort_by == 'name' %}selected{% endif %}>Sort: Filename</option>
+              <option value="status" {% if sort_by == 'status' %}selected{% endif %}>Sort: Status</option>
             </select>
             <select id="docs-sort-dir">
               <option value="desc" {% if sort_dir == 'desc' %}selected{% endif %}>Newest / Z-A</option>
@@ -432,7 +735,7 @@
           {% for d in documents %}
           <tr class="doc-row {% if d.auto_filed_recent %}doc-row-autofile{% endif %}" data-row-id="{{ loop.index0 }}" data-rel-path="{{ d.rel_path }}" onclick="toggleRowById(event, '{{ loop.index0 }}')" role="button" tabindex="0" onkeydown="toggleRowByKey(event, '{{ loop.index0 }}')">
             <td>
-              <input type="checkbox" class="doc-select" data-inbox-user="{{ d.inbox_user }}" name="selected" value="{{ d.bucket }}|{{ d.rel_path }}">
+              <input type="checkbox" class="doc-select" data-inbox-user="{{ d.inbox_user }}" name="selected" value="{{ d.bucket }}|{{ d.rel_path }}" form="bulk-move-form">
             </td>
             <td>
               <span class="chip chip-{{ d.bucket }}">{{ d.bucket }}</span>
@@ -443,7 +746,7 @@
               <span class="chip chip-autofile" title="Auto-filed at {{ d.auto_filed_iso }}">auto-filed</span>
               {% endif %}
             </td>
-            <td class="path"><a href="{{ url_for('open_document', bucket=d.bucket, rel_path=d.rel_path) }}" target="_blank" rel="noopener" title="{{ d.rel_path }}">{{ d.filename }}</a></td>
+            <td class="doc-filename-cell"><span class="doc-name">{{ d.filename }}</span> <a class="doc-open-link" href="{{ url_for('open_document', bucket=d.bucket, rel_path=d.rel_path) }}" target="_blank" rel="noopener" title="Open {{ d.rel_path }}">&#128196; Open</a></td>
             <td>{{ d.doc_type }}</td>
             <td>{{ d.scanned_iso }}</td>
             <td>{{ d.modified_iso }}</td>
@@ -460,7 +763,7 @@
               <div class="detail-long"><strong>Full path:</strong> {{ d.rel_path }}</div>
               <div class="detail-long"><strong>Keywords:</strong> {{ d.keywords|join(', ') if d.keywords else '-' }}</div>
 
-              <form method="post" action="/keywords" class="keyword-form">
+              <form method="post" action="/keywords" class="keyword-form keyword-form-full">
                 <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
                 <input type="hidden" name="src_bucket" value="{{ d.bucket }}">
                 <input type="hidden" name="rel_path" value="{{ d.rel_path }}">
@@ -487,47 +790,60 @@
                   {% endfor %}
                 </select>
 
-                <input type="text" name="target_year" value="{{ d.year or '2026' }}" placeholder="year">
-                <input type="text" name="target_sender" value="{{ d.sender or 'unknown' }}" placeholder="sender">
-                <button type="submit">Move</button>
-              </form>
-
-              <form method="post" action="/add-category" class="inline-category-form">
-                <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
-                <input type="hidden" name="next" value="{{ return_query }}">
-                <input type="text" name="new_category" placeholder="new category for this item">
-                <button type="submit">Add Category</button>
+                <input type="text" name="target_year" value="{{ d.target_default_year }}" placeholder="year">
+                <input type="text" name="target_sender" value="{{ d.sender if d.sender and d.sender != 'unknown' else '' }}" placeholder="sender">
+                <button type="submit">Move (Learn)</button>
               </form>
 
               <div class="detail-actions">
+                <form method="post" action="/add-category" class="inline-category-form">
+                  <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+                  <input type="hidden" name="next" value="{{ return_query }}">
+                  <input type="text" name="new_category" placeholder="new category">
+                  <button type="submit">Add Category</button>
+                </form>
                 <form method="post" action="/split-manual" class="split-manual-form">
                   <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
                   <input type="hidden" name="src_bucket" value="{{ d.bucket }}">
                   <input type="hidden" name="rel_path" value="{{ d.rel_path }}">
                   <input type="hidden" name="next" value="{{ return_query }}">
-                  <input type="text" name="split_pages" placeholder="1,4,5" title="Start pages, 1-based">
-                  <button type="submit">Split @ pages + Reprocess</button>
+                  <input type="text" name="split_pages" placeholder="split at pages e.g. 1,4,5" title="Start pages, 1-based">
+                  <button type="submit">Split + Reprocess</button>
                 </form>
-                <form method="post" action="/delete" class="delete-form" onsubmit="return confirm('Delete this file permanently? {{ d.rel_path }}');">
-                  <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
-                  <input type="hidden" name="src_bucket" value="{{ d.bucket }}">
-                  <input type="hidden" name="rel_path" value="{{ d.rel_path }}">
-                  <input type="hidden" name="next" value="{{ return_query }}">
-                  <button type="submit" class="danger">Delete</button>
-                </form>
+                <div class="detail-actions-right">
+                  <form method="post" action="/reclassify" class="reclassify-form" onsubmit="return confirm('Send this file back to inbox for reclassification? {{ d.rel_path }}');">
+                    <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+                    <input type="hidden" name="src_bucket" value="{{ d.bucket }}">
+                    <input type="hidden" name="rel_path" value="{{ d.rel_path }}">
+                    <input type="hidden" name="next" value="{{ return_query }}">
+                    <button type="submit">Reclassify</button>
+                  </form>
+                  <form method="post" action="/delete" class="delete-form" onsubmit="return confirm('Delete this file permanently? {{ d.rel_path }}');">
+                    <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+                    <input type="hidden" name="src_bucket" value="{{ d.bucket }}">
+                    <input type="hidden" name="rel_path" value="{{ d.rel_path }}">
+                    <input type="hidden" name="next" value="{{ return_query }}">
+                    <button type="submit" class="danger">Delete</button>
+                  </form>
+                </div>
               </div>
             </td>
           </tr>
+          {% if not loop.last %}
+          <tr class="doc-gap-row" aria-hidden="true">
+            <td colspan="7"></td>
+          </tr>
+          {% endif %}
           {% endfor %}
         </tbody>
       </table>
       </div>
-      </form>
     </section>
   </main>
 
   <script>
     let autoRefreshTimer = null;
+    let queueWasActive = false;
     const docsUiStateKey = 'docs_ui_state_v1';
 
     function loadDocsUiState() {
@@ -606,8 +922,14 @@
           body.innerHTML = '';
           table.hidden = true;
           empty.hidden = false;
+          if (queueWasActive && !userIsEditing()) {
+            queueWasActive = false;
+            window.location.reload();
+            return;
+          }
           return;
         }
+        queueWasActive = true;
         body.innerHTML = rows.map(queueRowHtml).join('');
         table.hidden = false;
         empty.hidden = true;
@@ -753,14 +1075,16 @@
     if (bulkMoveForm) {
       bulkMoveForm.addEventListener('submit', (ev) => {
         const selectedCount = selectedDocCheckboxes().filter((cb) => cb.checked).length;
-        if (!bulkTargetUser || !bulkTargetUser.value) {
-          ev.preventDefault();
-          alert('Choose a destination inbox first.');
-          return;
-        }
+        const submitter = ev.submitter;
+        const isReclassify = submitter && submitter.id === 'bulk-reclassify-submit';
         if (selectedCount === 0) {
           ev.preventDefault();
           alert('Select at least one document.');
+          return;
+        }
+        if (!isReclassify && (!bulkTargetUser || !bulkTargetUser.value)) {
+          ev.preventDefault();
+          alert('Choose a destination inbox first.');
           return;
         }
       });
@@ -880,9 +1204,91 @@
       treeFilter.addEventListener('input', applyTreeFilter);
     }
 
+    document.querySelectorAll('.tree-find-doc').forEach((link) => {
+      link.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const relPath = link.dataset.relPath;
+        if (!relPath) return;
+        const row = document.querySelector('.doc-row[data-rel-path="' + CSS.escape(relPath) + '"]');
+        if (!row) return;
+        const docsWrap = document.getElementById('documents-table-wrap');
+        if (docsWrap && docsWrap.hidden) docsWrap.hidden = false;
+        const id = row.dataset.rowId;
+        if (id) {
+          const detail = document.getElementById('detail-' + id);
+          if (detail) detail.hidden = false;
+        }
+        row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        row.classList.add('doc-row-highlight');
+        setTimeout(() => row.classList.remove('doc-row-highlight'), 2000);
+      });
+    });
+
     const setupModal = document.getElementById('setup-modal');
     const openSetupBtn = document.getElementById('open-setup');
     const closeSetupBtn = document.getElementById('close-setup');
+
+    function _labelFromName(name) {
+      if (!name) return '';
+      const cleaned = String(name).replaceAll('_', ' ').trim();
+      if (!cleaned) return '';
+      return cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
+    }
+
+    function ensureFieldHints(root, selector) {
+      if (!root) return;
+      const fields = root.querySelectorAll(selector);
+      fields.forEach((el) => {
+        const tag = el.tagName;
+        const type = String(el.getAttribute('type') || '').toLowerCase();
+        if (type === 'hidden' || type === 'checkbox' || type === 'radio' || type === 'submit' || type === 'button' || type === 'file') {
+          return;
+        }
+        if (el.closest('label.checkline')) {
+          return;
+        }
+        if (el.closest('.field-stack')) {
+          return;
+        }
+        const parent = el.parentElement;
+        if (!parent) return;
+
+        const placeholder = String(el.getAttribute('placeholder') || '').trim();
+        let labelText = placeholder;
+        if (!labelText && tag === 'SELECT') {
+          labelText = _labelFromName(el.getAttribute('name'));
+        }
+        if (!labelText) {
+          labelText = _labelFromName(el.getAttribute('name'));
+        }
+        if (!labelText) return;
+
+        const wrapper = document.createElement('div');
+        wrapper.className = 'field-stack';
+        const hint = document.createElement('small');
+        hint.className = 'field-hint';
+        hint.textContent = labelText;
+        parent.insertBefore(wrapper, el);
+        wrapper.appendChild(hint);
+        wrapper.appendChild(el);
+      });
+    }
+
+    function normalizeKeywordForms() {
+      document.querySelectorAll('.keyword-form').forEach((form) => {
+        form.querySelectorAll('.field-stack').forEach((stack) => {
+          const field = stack.querySelector('input, textarea, select');
+          if (!field) {
+            stack.remove();
+            return;
+          }
+          form.insertBefore(field, stack);
+          stack.remove();
+        });
+        form.querySelectorAll('.field-hint').forEach((hint) => hint.remove());
+      });
+    }
 
     function setSetupOpen(open) {
       if (!setupModal) return;
@@ -897,11 +1303,40 @@
       closeSetupBtn.addEventListener('click', () => setSetupOpen(false));
     }
     if (setupModal) {
+      ensureFieldHints(setupModal, '.setup-form input, .setup-form textarea, .setup-form select');
       setupModal.querySelectorAll('[data-close-setup="1"]').forEach((el) => {
         el.addEventListener('click', () => setSetupOpen(false));
       });
       document.addEventListener('keydown', (ev) => {
         if (ev.key === 'Escape') setSetupOpen(false);
+      });
+    }
+
+    normalizeKeywordForms();
+    ensureFieldHints(document, '.move-form input, .move-form select, .inline-category-form input, .split-manual-form input');
+
+    const helpModal = document.getElementById('help-modal');
+    const openHelpBtn = document.getElementById('open-help');
+    const closeHelpBtn = document.getElementById('close-help');
+
+    function setHelpOpen(open) {
+      if (!helpModal) return;
+      helpModal.hidden = !open;
+      document.body.classList.toggle('no-scroll', open);
+    }
+
+    if (openHelpBtn) {
+      openHelpBtn.addEventListener('click', () => setHelpOpen(true));
+    }
+    if (closeHelpBtn) {
+      closeHelpBtn.addEventListener('click', () => setHelpOpen(false));
+    }
+    if (helpModal) {
+      helpModal.querySelectorAll('[data-close-help="1"]').forEach((el) => {
+        el.addEventListener('click', () => setHelpOpen(false));
+      });
+      document.addEventListener('keydown', (ev) => {
+        if (ev.key === 'Escape') setHelpOpen(false);
       });
     }
 

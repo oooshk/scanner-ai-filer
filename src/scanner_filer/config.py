@@ -45,6 +45,9 @@ class SplitterConfig:
     min_pages_to_split: int
     max_first_page_chars: int
     boundary_keywords: list[str]
+    content_aware_enabled: bool
+    boundary_score_threshold: float
+    low_similarity_threshold: float
 
 
 @dataclass
@@ -67,6 +70,14 @@ class AppConfig:
     inbox_settle_seconds: int
     require_size_stability: bool
     stable_cycles_required: int
+    keyword_extract_max_chars: int
+    keyword_extract_limit: int
+    keyword_extract_include_phrases: bool
+    infer_year_from_text: bool
+    learning_from_move_enabled: bool
+    public_knowledge_enabled: bool
+    public_online_lookup_enabled: bool
+    public_acronym_overrides: dict[str, str]
     log_level: str
 
 
@@ -119,6 +130,9 @@ def load_config(config_path: Path) -> AppConfig:
                 ],
             )
         ),
+        content_aware_enabled=bool(splitter_raw.get("content_aware_enabled", True)),
+        boundary_score_threshold=max(0.4, min(2.0, float(splitter_raw.get("boundary_score_threshold", 0.95)))),
+        low_similarity_threshold=max(0.05, min(0.8, float(splitter_raw.get("low_similarity_threshold", 0.22)))),
     )
     rules_raw: dict[str, Any] = raw.get("rules", {})
     keyword_overrides_raw = rules_raw.get("keyword_overrides", {})
@@ -163,6 +177,19 @@ def load_config(config_path: Path) -> AppConfig:
         per_type_min_confidence=per_type_min_confidence,
     )
 
+    recognition_raw: dict[str, Any] = raw.get("recognition", {})
+    learning_raw: dict[str, Any] = raw.get("learning", {})
+    public_raw: dict[str, Any] = raw.get("public_knowledge", {})
+
+    public_acronym_overrides: dict[str, str] = {}
+    overrides_raw = public_raw.get("acronym_overrides", {})
+    if isinstance(overrides_raw, dict):
+        for k, v in overrides_raw.items():
+            key = str(k).strip().lower()
+            val = str(v).strip().lower()
+            if key and val:
+                public_acronym_overrides[key] = val
+
     return AppConfig(
         paths=paths,
         ocr=ocr,
@@ -173,6 +200,14 @@ def load_config(config_path: Path) -> AppConfig:
         inbox_settle_seconds=int(raw.get("inbox_settle_seconds", 20)),
         require_size_stability=bool(raw.get("require_size_stability", True)),
         stable_cycles_required=max(1, int(raw.get("stable_cycles_required", 2))),
+        keyword_extract_max_chars=max(1200, int(recognition_raw.get("keyword_extract_max_chars", 5000))),
+        keyword_extract_limit=max(8, int(recognition_raw.get("keyword_extract_limit", 24))),
+        keyword_extract_include_phrases=bool(recognition_raw.get("keyword_extract_include_phrases", True)),
+        infer_year_from_text=bool(recognition_raw.get("infer_year_from_text", True)),
+        learning_from_move_enabled=bool(learning_raw.get("enabled", True)),
+        public_knowledge_enabled=bool(public_raw.get("enabled", False)),
+        public_online_lookup_enabled=bool(public_raw.get("online_lookup_enabled", False)),
+        public_acronym_overrides=public_acronym_overrides,
         log_level=str(raw.get("log_level", "INFO")),
     )
 

@@ -8,6 +8,7 @@ from pathlib import Path
 
 from .classifier import classify_text
 from .config import AppConfig
+from .manual_learning import predict_manual_learning
 from .ocr import extract_text, run_ocr
 from .progress_state import clear_active, set_active
 from .rules import build_destination, detect_inbox_user, unique_path
@@ -95,7 +96,23 @@ def process_one_file(src_pdf: Path, cfg: AppConfig) -> Path:
                 parts_total=len(parts),
             )
             text = extract_text(part_pdf, max_chars=cfg.llm.max_input_chars)
-            classification = classify_text(text, cfg.llm, cfg.rules)
+            classification = classify_text(
+                text,
+                cfg.llm,
+                cfg.rules,
+                public_knowledge_enabled=cfg.public_knowledge_enabled,
+                public_online_lookup_enabled=cfg.public_online_lookup_enabled,
+                public_acronym_overrides=cfg.public_acronym_overrides,
+            )
+            learned = predict_manual_learning(cfg, text=text, inbox_user=inbox_user)
+            if learned:
+                learned_type, learned_conf, learned_reason = learned
+                if learned_type in cfg.rules.allowed_doc_types and learned_type != cfg.rules.unknown_doc_type:
+                    classification.doc_type = learned_type
+                    classification.confidence = max(classification.confidence, learned_conf)
+                    classification.reason = learned_reason
+                    if "manual_learning" not in classification.tags:
+                        classification.tags.append("manual_learning")
 
             dest = unique_path(
                 build_destination(
@@ -152,7 +169,7 @@ def process_one_file(src_pdf: Path, cfg: AppConfig) -> Path:
         candidates = sorted(cfg.paths.processing.glob(f"{working_pdf.stem}*.pdf"))
         for candidate in candidates:
             rejected = unique_path(rejected_base / candidate.name)
-            candidate.replace(rejected)
+            shutil.move(str(candidate), str(rejected))
             logger.warning("Moved failed file to rejected: %s", rejected)
         clear_active(cfg, status="failed", message=src_pdf.name)
         raise

@@ -14,6 +14,7 @@ This code is provided as-is, without warranty or guarantee of fitness, security,
 - **Live queue** — scanner upload queue polled every 5 seconds (no page reload)
 - **Directory tree browser** — expandable tree view of your archive with client-side filter
 - **Editable keywords** — override the auto-extracted OCR keywords per document
+- **Learns from manual filing** — when you move a document to the right archive category, future similar documents are auto-filed accordingly
 - **Setup modal** — configure NAS Samba mount and scanner share directly from the browser
 - **Backup & restore** — export a tar.gz of all config and runtime state; restore on a new instance
 - **LLM-agnostic** — works with Ollama, llama.cpp, or any CLI tool

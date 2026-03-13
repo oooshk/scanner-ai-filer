@@ -76,6 +76,30 @@ rules:
   # Optional category-specific confidence thresholds for auto-filing.
   per_type_min_confidence: {}
 
+recognition:
+  # OCR text budget used for keyword/phrase extraction in the UI and learning helpers.
+  keyword_extract_max_chars: 5000
+  # Max number of extracted keywords/phrases stored per document.
+  keyword_extract_limit: 24
+  # Include 2-3 word phrases in extracted terms (in addition to single words).
+  keyword_extract_include_phrases: true
+  # Infer move-form default year from OCR text when possible.
+  infer_year_from_text: true
+
+learning:
+  # When false, manual move actions do not create/extend learned rules.
+  enabled: true
+
+public_knowledge:
+  # Enable acronym/domain hint assist during classification.
+  enabled: false
+  # When enabled, only acronym tokens (for example: ABCP) are looked up online.
+  # Full OCR/document text is never sent.
+  online_lookup_enabled: false
+  # Local acronym -> doc_type map (preferred over online lookup).
+  acronym_overrides:
+    acronym_name: pension
+
 poll_seconds: 5
 inbox_settle_seconds: 90
 require_size_stability: true

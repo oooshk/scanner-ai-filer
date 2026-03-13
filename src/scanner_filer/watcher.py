@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import shutil
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -92,12 +93,13 @@ def process_pending(cfg: AppConfig) -> int:
         except Exception as exc:  # pragma: no cover
             logger.exception("Failed to process %s: %s", entry, exc)
             rejected = unique_path(cfg.paths.rejected / entry.name)
+            rejected.parent.mkdir(parents=True, exist_ok=True)
             if entry.exists():
-                entry.replace(rejected)
+                shutil.move(str(entry), str(rejected))
             else:
                 processing_copy = cfg.paths.processing / entry.name
                 if processing_copy.exists():
-                    processing_copy.replace(rejected)
+                    shutil.move(str(processing_copy), str(rejected))
 
     # Drop stale size-state entries for files no longer in inbox.
     for key in list(_SIZE_STATE.keys()):

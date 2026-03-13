@@ -6,10 +6,14 @@ import re
 import shlex
 import subprocess
 from dataclasses import dataclass
+from urllib.parse import quote
+from urllib.request import Request, urlopen
 
 from .config import LLMConfig, RulesConfig
 
 logger = logging.getLogger(__name__)
+
+_PUBLIC_ACRONYM_CACHE: dict[str, str] = {}
 
 
 @dataclass
@@ -90,7 +94,100 @@ def _apply_rule_overrides(text: str, result: ClassificationResult, rules_cfg: Ru
     return result
 
 
-def classify_text(text: str, llm_cfg: LLMConfig, rules_cfg: RulesConfig) -> ClassificationResult:
+def _public_summary_to_type(summary: str, rules_cfg: RulesConfig) -> str:
+    low = summary.lower()
+    if any(k in low for k in ["pension", "retirement", "superannuation"]):
+        out = "pension"
+    elif any(k in low for k in ["insurance", "policy", "underwriter"]):
+        out = "insurance"
+    elif any(k in low for k in ["invoice", "billing", "bill to", "accounts payable"]):
+        out = "invoice"
+    elif any(k in low for k in ["bank", "statement", "sort code"]):
+        out = "bank_statement"
+    elif any(k in low for k in ["tax", "hmrc", "irs"]):
+        out = "tax"
+    elif any(k in low for k in ["medical", "hospital", "clinic", "nhs"]):
+        out = "medical"
+    elif any(k in low for k in ["receipt", "purchase", "merchant"]):
+        out = "receipt"
+    elif any(k in low for k in ["contract", "legal", "agreement"]):
+        out = "legal"
+    else:
+        out = rules_cfg.unknown_doc_type
+
+    return out if out in rules_cfg.allowed_doc_types else rules_cfg.unknown_doc_type
+
+
+def _lookup_public_acronym_type(acronym: str, rules_cfg: RulesConfig) -> str:
+    key = acronym.lower()
+    if key in _PUBLIC_ACRONYM_CACHE:
+        return _PUBLIC_ACRONYM_CACHE[key]
+
+    try:
+        # Token-only lookup to avoid sending private document text.
+        url = f"https://en.wikipedia.org/api/rest_v1/page/summary/{quote(acronym)}"
+        req = Request(url, headers={"User-Agent": "scanner-filer/1.0"})
+        with urlopen(req, timeout=2.5) as resp:
+            payload = json.loads(resp.read().decode("utf-8", errors="ignore"))
+        summary = str(payload.get("extract", "")).strip()
+        guessed = _public_summary_to_type(summary, rules_cfg)
+        _PUBLIC_ACRONYM_CACHE[key] = guessed
+        return guessed
+    except Exception:
+        _PUBLIC_ACRONYM_CACHE[key] = rules_cfg.unknown_doc_type
+        return rules_cfg.unknown_doc_type
+
+
+def _apply_public_knowledge_overrides(
+    text: str,
+    result: ClassificationResult,
+    rules_cfg: RulesConfig,
+    enabled: bool,
+    online_lookup_enabled: bool,
+    acronym_overrides: dict[str, str] | None,
+) -> ClassificationResult:
+    if not enabled:
+        return result
+
+    # Respect confident non-unknown outputs; this assist is mainly to resolve unknown/weak cases.
+    if result.doc_type != rules_cfg.unknown_doc_type and result.confidence >= 0.8:
+        return result
+
+    overrides = {str(k).strip().lower(): str(v).strip().lower() for k, v in (acronym_overrides or {}).items()}
+    acronyms = sorted(set(re.findall(r"\b[A-Z][A-Z0-9]{2,10}\b", text)))
+    for token in acronyms[:16]:
+        token_key = token.lower()
+        forced = overrides.get(token_key, "")
+        if forced in rules_cfg.allowed_doc_types and forced != rules_cfg.unknown_doc_type:
+            result.doc_type = forced
+            result.confidence = max(result.confidence, 0.9)
+            result.reason = f"public_acronym_override:{token_key}"
+            if "public_knowledge" not in result.tags:
+                result.tags.append("public_knowledge")
+            return result
+
+        if online_lookup_enabled:
+            guessed = _lookup_public_acronym_type(token, rules_cfg)
+            if guessed in rules_cfg.allowed_doc_types and guessed != rules_cfg.unknown_doc_type:
+                result.doc_type = guessed
+                result.confidence = max(result.confidence, 0.82)
+                result.reason = f"public_online_acronym:{token_key}"
+                if "public_knowledge" not in result.tags:
+                    result.tags.append("public_knowledge")
+                return result
+
+    return result
+
+
+def classify_text(
+    text: str,
+    llm_cfg: LLMConfig,
+    rules_cfg: RulesConfig,
+    *,
+    public_knowledge_enabled: bool = False,
+    public_online_lookup_enabled: bool = False,
+    public_acronym_overrides: dict[str, str] | None = None,
+) -> ClassificationResult:
     if not text.strip():
         return ClassificationResult(
             doc_type=rules_cfg.unknown_doc_type,
@@ -102,7 +199,15 @@ def classify_text(text: str, llm_cfg: LLMConfig, rules_cfg: RulesConfig) -> Clas
         )
 
     if not llm_cfg.enabled:
-        return _apply_rule_overrides(text, _keyword_fallback(text, rules_cfg), rules_cfg)
+        out = _apply_rule_overrides(text, _keyword_fallback(text, rules_cfg), rules_cfg)
+        return _apply_public_knowledge_overrides(
+            text,
+            out,
+            rules_cfg,
+            enabled=public_knowledge_enabled,
+            online_lookup_enabled=public_online_lookup_enabled,
+            acronym_overrides=public_acronym_overrides,
+        )
 
     extra_guidance = llm_cfg.classification_guidance.strip()
     guidance_block = f"\nAdditional classification guidance:\n{extra_guidance}\n" if extra_guidance else ""
@@ -146,16 +251,40 @@ def classify_text(text: str, llm_cfg: LLMConfig, rules_cfg: RulesConfig) -> Clas
             )
     except subprocess.TimeoutExpired:
         logger.warning("LLM classifier timeout; using fallback")
-        return _apply_rule_overrides(text, _keyword_fallback(text, rules_cfg), rules_cfg)
+        out = _apply_rule_overrides(text, _keyword_fallback(text, rules_cfg), rules_cfg)
+        return _apply_public_knowledge_overrides(
+            text,
+            out,
+            rules_cfg,
+            enabled=public_knowledge_enabled,
+            online_lookup_enabled=public_online_lookup_enabled,
+            acronym_overrides=public_acronym_overrides,
+        )
 
     if completed.returncode != 0:
         logger.warning("LLM classifier failed: %s", completed.stderr.strip())
-        return _apply_rule_overrides(text, _keyword_fallback(text, rules_cfg), rules_cfg)
+        out = _apply_rule_overrides(text, _keyword_fallback(text, rules_cfg), rules_cfg)
+        return _apply_public_knowledge_overrides(
+            text,
+            out,
+            rules_cfg,
+            enabled=public_knowledge_enabled,
+            online_lookup_enabled=public_online_lookup_enabled,
+            acronym_overrides=public_acronym_overrides,
+        )
 
     json_block = _sanitize_json_block(completed.stdout)
     if not json_block:
         logger.warning("LLM output had no JSON; using fallback")
-        return _apply_rule_overrides(text, _keyword_fallback(text, rules_cfg), rules_cfg)
+        out = _apply_rule_overrides(text, _keyword_fallback(text, rules_cfg), rules_cfg)
+        return _apply_public_knowledge_overrides(
+            text,
+            out,
+            rules_cfg,
+            enabled=public_knowledge_enabled,
+            online_lookup_enabled=public_online_lookup_enabled,
+            acronym_overrides=public_acronym_overrides,
+        )
 
     try:
         data = json.loads(json_block)
@@ -178,7 +307,23 @@ def classify_text(text: str, llm_cfg: LLMConfig, rules_cfg: RulesConfig) -> Clas
             confidence=confidence,
             reason=str(data.get("reason", "llm")).strip() or "llm",
         )
-        return _apply_rule_overrides(text, out, rules_cfg)
+        out = _apply_rule_overrides(text, out, rules_cfg)
+        return _apply_public_knowledge_overrides(
+            text,
+            out,
+            rules_cfg,
+            enabled=public_knowledge_enabled,
+            online_lookup_enabled=public_online_lookup_enabled,
+            acronym_overrides=public_acronym_overrides,
+        )
     except Exception:
         logger.warning("LLM JSON parsing failed; using fallback")
-        return _apply_rule_overrides(text, _keyword_fallback(text, rules_cfg), rules_cfg)
+        out = _apply_rule_overrides(text, _keyword_fallback(text, rules_cfg), rules_cfg)
+        return _apply_public_knowledge_overrides(
+            text,
+            out,
+            rules_cfg,
+            enabled=public_knowledge_enabled,
+            online_lookup_enabled=public_online_lookup_enabled,
+            acronym_overrides=public_acronym_overrides,
+        )

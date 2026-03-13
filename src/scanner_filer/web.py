@@ -10,7 +10,7 @@ import shutil
 import subprocess
 import tarfile
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from io import BytesIO
 from pathlib import Path
 from urllib.parse import parse_qs, urlencode
@@ -21,8 +21,9 @@ import yaml
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from .config import AppConfig, ensure_directories, load_config
+from .manual_learning import record_manual_learning
 from .ocr import extract_text
-from .progress_state import read_progress
+from .progress_state import clear_active, read_progress
 from .rules import unique_path
 from .splitter import split_pdf_at_starts, split_pdf_if_needed
 
@@ -44,6 +45,7 @@ class DocumentRecord:
     keywords: list[str]
     suggested_type: str
     target_default_type: str
+    target_default_year: str
     inbox_user: str
     auto_filed_recent: bool
     auto_filed_iso: str
@@ -175,6 +177,7 @@ def _scan_bucket(cfg: AppConfig, root: Path, bucket: str, rel_prefix: str = "") 
                 keywords=[],
                 suggested_type="",
                 target_default_type=doc_type,
+                target_default_year=year,
                 inbox_user="",
                 auto_filed_recent=False,
                 auto_filed_iso="",
@@ -239,6 +242,7 @@ def collect_documents(cfg: AppConfig) -> list[DocumentRecord]:
         else:
             first_allowed = [t for t in allowed if t != cfg.rules.unknown_doc_type]
             d.target_default_type = first_allowed[0] if first_allowed else cfg.rules.unknown_doc_type
+        d.target_default_year = _default_year_for_doc(d)
     docs.sort(key=lambda d: d.sort_ts, reverse=True)
     return docs
 
@@ -288,8 +292,9 @@ def collect_queue(cfg: AppConfig) -> list[QueueRecord]:
             pct = active_percent
             stage = active_stage
         else:
+            age_mins = int((now_ts - stat.st_mtime) / 60)
             pct = 55
-            stage = "orphaned_processing"
+            stage = f"stuck ({age_mins}m)" if age_mins > 5 else "orphaned_processing"
         rows.append(
             QueueRecord(
                 filename=p.name,
@@ -451,7 +456,7 @@ def _learn_keyword_overrides_from_manual_move(
         w = str(word).strip().lower()
         if len(w) < 3 or w in STOPWORDS:
             continue
-        if not re.fullmatch(r"[a-z0-9._-]{3,40}", w):
+        if not re.fullmatch(r"[a-z0-9._ -]{3,60}", w):
             continue
         clean_words.append(w)
     if not clean_words:
@@ -482,15 +487,63 @@ def _learn_keyword_overrides_from_manual_move(
     return added
 
 
-def _derive_keywords(text: str, limit: int = 15) -> list[str]:
+def _derive_keywords(text: str, limit: int = 24, include_phrases: bool = True) -> list[str]:
     tokens = re.findall(r"[A-Za-z][A-Za-z0-9._-]{2,}", text.lower())
-    freq: dict[str, int] = {}
-    for token in tokens:
-        if token in STOPWORDS or token.isdigit() or len(token) < 3:
-            continue
-        freq[token] = freq.get(token, 0) + 1
-    ranked = sorted(freq.items(), key=lambda x: (-x[1], x[0]))
+    words = [t for t in tokens if t not in STOPWORDS and not t.isdigit() and len(t) >= 3]
+
+    unigram: dict[str, int] = {}
+    for token in words:
+        unigram[token] = unigram.get(token, 0) + 1
+
+    bigram: dict[str, int] = {}
+    trigram: dict[str, int] = {}
+    if include_phrases:
+        for i in range(len(words) - 1):
+            p2 = f"{words[i]} {words[i + 1]}"
+            bigram[p2] = bigram.get(p2, 0) + 1
+        for i in range(len(words) - 2):
+            p3 = f"{words[i]} {words[i + 1]} {words[i + 2]}"
+            trigram[p3] = trigram.get(p3, 0) + 1
+
+    scored: dict[str, float] = {}
+    for term, count in unigram.items():
+        scored[term] = max(scored.get(term, 0.0), float(count))
+    for term, count in bigram.items():
+        scored[term] = max(scored.get(term, 0.0), float(count) * 1.35)
+    for term, count in trigram.items():
+        scored[term] = max(scored.get(term, 0.0), float(count) * 1.55)
+
+    ranked = sorted(scored.items(), key=lambda x: (-x[1], x[0]))
     return [k for k, _ in ranked[:limit]]
+
+
+def _infer_year_from_text(text: str, fallback_year: str) -> str:
+    current_year = datetime.now().year + 1
+    years = re.findall(r"\b(19\d{2}|20\d{2})\b", text)
+    filtered: list[int] = []
+    for y in years:
+        yi = int(y)
+        if 1990 <= yi <= current_year:
+            filtered.append(yi)
+    if not filtered:
+        return fallback_year
+
+    freq: dict[int, int] = {}
+    for y in filtered:
+        freq[y] = freq.get(y, 0) + 1
+
+    ranked = sorted(freq.items(), key=lambda kv: (-kv[1], -kv[0]))
+    return str(ranked[0][0]) if ranked else fallback_year
+
+
+def _default_year_for_doc(doc: DocumentRecord) -> str:
+    year = str(doc.year).strip()
+    if re.fullmatch(r"\d{4}", year):
+        return year
+    scanned_year_match = re.search(r"\b(19\d{2}|20\d{2})\b", doc.scanned_iso)
+    if scanned_year_match:
+        return scanned_year_match.group(1)
+    return str(datetime.now().year)
 
 
 def _parse_keyword_input(raw: str) -> list[str]:
@@ -521,16 +574,33 @@ def _attach_keywords(cfg: AppConfig, docs: list[DocumentRecord]) -> None:
 
         if isinstance(cached, dict) and isinstance(cached.get("manual_keywords"), list):
             doc.keywords = [str(k) for k in cached.get("manual_keywords", [])]
+            if not doc.year:
+                cached_year = str(cached.get("inferred_year", "")).strip()
+                if re.fullmatch(r"\d{4}", cached_year):
+                    doc.year = cached_year
             continue
 
         if isinstance(cached, dict) and cached.get("sig") == sig and isinstance(cached.get("keywords"), list):
             doc.keywords = [str(k) for k in cached.get("keywords", [])]
+            if not doc.year:
+                cached_year = str(cached.get("inferred_year", "")).strip()
+                if re.fullmatch(r"\d{4}", cached_year):
+                    doc.year = cached_year
             continue
 
-        text = extract_text(doc.abs_path, max_chars=2200)
-        keywords = _derive_keywords(text)
+        text = extract_text(doc.abs_path, max_chars=cfg.keyword_extract_max_chars)
+        keywords = _derive_keywords(
+            text,
+            limit=cfg.keyword_extract_limit,
+            include_phrases=cfg.keyword_extract_include_phrases,
+        )
+        scanned_year_match = re.search(r"\b(19\d{2}|20\d{2})\b", doc.scanned_iso)
+        scanned_year = scanned_year_match.group(1) if scanned_year_match else str(datetime.now().year)
+        inferred_year = _infer_year_from_text(text, fallback_year=scanned_year) if cfg.infer_year_from_text else scanned_year
         doc.keywords = keywords
-        records[key] = {"sig": sig, "keywords": keywords}
+        if not doc.year:
+            doc.year = inferred_year
+        records[key] = {"sig": sig, "keywords": keywords, "inferred_year": inferred_year}
         dirty = True
 
     if dirty:
@@ -613,6 +683,8 @@ def _ensure_unique_destination(dst: Path) -> Path:
 
 
 def _sort_documents(docs: list[DocumentRecord], sort_by: str, sort_dir: str) -> list[DocumentRecord]:
+    # status sort order: review first, then rejected, then archive
+    _status_order = {"review": 0, "rejected": 1, "archive": 2}
     key_map = {
         "received": lambda d: d.sort_ts,
         "processed": lambda d: d.modified_ts,
@@ -621,6 +693,7 @@ def _sort_documents(docs: list[DocumentRecord], sort_by: str, sort_dir: str) -> 
         "sender": lambda d: d.sender.lower(),
         "size": lambda d: d.size_bytes,
         "name": lambda d: d.filename.lower(),
+        "status": lambda d: (_status_order.get(d.bucket, 9), d.sort_ts),
     }
     key_func = key_map.get(sort_by, key_map["received"])
     reverse = sort_dir != "asc"
@@ -1212,6 +1285,31 @@ def create_app(cfg: AppConfig, config_path: Path) -> Flask:
                 "ocr_deskew": bool(cfg.ocr.deskew),
                 "ocr_clean": bool(cfg.ocr.clean),
                 "ocr_extra_args": str(cfg.ocr.extra_args),
+                "keyword_extract_max_chars": int(cfg.keyword_extract_max_chars),
+                "keyword_extract_limit": int(cfg.keyword_extract_limit),
+                "keyword_extract_include_phrases": bool(cfg.keyword_extract_include_phrases),
+                "infer_year_from_text": bool(cfg.infer_year_from_text),
+                "learning_from_move_enabled": bool(cfg.learning_from_move_enabled),
+                "public_knowledge_enabled": bool(cfg.public_knowledge_enabled),
+                "public_online_lookup_enabled": bool(cfg.public_online_lookup_enabled),
+                "public_acronym_overrides": json.dumps(cfg.public_acronym_overrides, ensure_ascii=True, indent=2),
+                "poll_seconds": int(cfg.poll_seconds),
+                "inbox_settle_seconds": int(cfg.inbox_settle_seconds),
+                "require_size_stability": bool(cfg.require_size_stability),
+                "stable_cycles_required": int(cfg.stable_cycles_required),
+                "log_level": str(cfg.log_level),
+                "llm_enabled": bool(cfg.llm.enabled),
+                "llm_timeout_seconds": int(cfg.llm.timeout_seconds),
+                "llm_max_input_chars": int(cfg.llm.max_input_chars),
+                "llm_command_template": str(cfg.llm.command_template),
+                "ocr_enabled": bool(cfg.ocr.enabled),
+                "splitter_enabled": bool(cfg.splitter.enabled),
+                "splitter_min_pages_to_split": int(cfg.splitter.min_pages_to_split),
+                "splitter_max_first_page_chars": int(cfg.splitter.max_first_page_chars),
+                "splitter_boundary_keywords": ", ".join(cfg.splitter.boundary_keywords),
+                "splitter_content_aware_enabled": bool(cfg.splitter.content_aware_enabled),
+                "splitter_boundary_score_threshold": float(cfg.splitter.boundary_score_threshold),
+                "splitter_low_similarity_threshold": float(cfg.splitter.low_similarity_threshold),
                 "scanner_user": "scannerdrop",
                 "scanner_share": "scanner_inbox",
             },
@@ -1238,6 +1336,61 @@ def create_app(cfg: AppConfig, config_path: Path) -> Flask:
                 ]
             }
         )
+
+    @app.post("/purge-processing")
+    def purge_processing():
+        next_query = request.form.get("next", "").strip() or request.args.get("next", "").strip()
+        processing_dir = cfg.paths.processing
+        if not processing_dir.exists():
+            return _redirect_index_with_context("Processing folder does not exist", next_query)
+
+        stale_after_seconds = 10 * 60
+        active_progress = read_progress(cfg).get("active", {})
+        active_name = ""
+        active_is_stale = False
+        if isinstance(active_progress, dict):
+            working = str(active_progress.get("working", ""))
+            if working:
+                active_name = Path(working).name
+
+            updated_raw = str(active_progress.get("updated_at", "")).strip()
+            if updated_raw:
+                try:
+                    active_updated = datetime.fromisoformat(updated_raw.replace("Z", "+00:00"))
+                    if active_updated.tzinfo is None:
+                        active_updated = active_updated.replace(tzinfo=timezone.utc)
+                    age_seconds = max(0.0, (datetime.now(timezone.utc) - active_updated).total_seconds())
+                    active_is_stale = age_seconds >= stale_after_seconds
+                except ValueError:
+                    active_is_stale = False
+
+        rescued = []
+        skipped_active = False
+        for p in sorted(processing_dir.glob("*.pdf")):
+            if p.name == active_name:
+                if not active_is_stale:
+                    skipped_active = True
+                    continue
+            try:
+                moved = _requeue_parts_to_inbox(cfg, [p])
+                rescued.extend(moved)
+            except Exception:
+                pass
+
+        if active_is_stale and active_name:
+            clear_active(cfg, "rescued_stale_active", f"stale active job rescued: {active_name}")
+
+        count = len(rescued)
+        if count:
+            if active_is_stale and active_name:
+                return _redirect_index_with_context(
+                    f"Rescued {count} stuck file(s), including stale active job: {active_name}",
+                    next_query,
+                )
+            return _redirect_index_with_context(f"Rescued {count} stuck file(s) back to inbox for reprocessing", next_query)
+        if skipped_active:
+            return _redirect_index_with_context("No stuck files found (active job is still fresh; not rescued)", next_query)
+        return _redirect_index_with_context("No stuck files found", next_query)
 
     @app.post("/add-category")
     def add_category():
@@ -1273,13 +1426,12 @@ def create_app(cfg: AppConfig, config_path: Path) -> Flask:
         src_bucket = request.form.get("src_bucket", "")
         rel_path = request.form.get("rel_path", "")
         keywords_raw = request.form.get("keywords", "")
-        roots = _roots(cfg)
-
-        if src_bucket not in roots:
+        if src_bucket not in _roots(cfg):
             return _redirect_index_with_context("Invalid source bucket for keywords", next_query)
 
         try:
-            src = _safe_join(roots[src_bucket], rel_path)
+            src_root, rel_local, _src_user = _resolve_doc_source(cfg, src_bucket, rel_path)
+            src = _safe_join(src_root, rel_local)
         except ValueError:
             return _redirect_index_with_context("Invalid source path", next_query)
 
@@ -1567,6 +1719,14 @@ def create_app(cfg: AppConfig, config_path: Path) -> Flask:
         ocr_deskew = request.form.get("ocr_deskew", "off") == "on"
         ocr_clean = request.form.get("ocr_clean", "off") == "on"
         ocr_extra_args = request.form.get("ocr_extra_args", "").strip()
+        keyword_extract_max_chars_raw = request.form.get("keyword_extract_max_chars", "").strip() or "5000"
+        keyword_extract_limit_raw = request.form.get("keyword_extract_limit", "").strip() or "24"
+        keyword_extract_include_phrases = request.form.get("keyword_extract_include_phrases", "off") == "on"
+        infer_year_from_text = request.form.get("infer_year_from_text", "off") == "on"
+        learning_from_move_enabled = request.form.get("learning_from_move_enabled", "off") == "on"
+        public_knowledge_enabled = request.form.get("public_knowledge_enabled", "off") == "on"
+        public_online_lookup_enabled = request.form.get("public_online_lookup_enabled", "off") == "on"
+        public_acronym_overrides_raw = request.form.get("public_acronym_overrides", "").strip() or "{}"
 
         try:
             confidence = float(confidence_raw)
@@ -1577,11 +1737,22 @@ def create_app(cfg: AppConfig, config_path: Path) -> Flask:
             return _redirect_index_with_context("AI confidence threshold must be between 0 and 1", next_query)
         if len(guidance) > 2000:
             return _redirect_index_with_context("AI guidance is too long (max 2000 characters)", next_query)
+        try:
+            keyword_extract_max_chars = int(keyword_extract_max_chars_raw)
+            keyword_extract_limit = int(keyword_extract_limit_raw)
+        except ValueError:
+            return _redirect_index_with_context("Keyword extraction limits must be numbers", next_query)
+
+        if keyword_extract_max_chars < 1200 or keyword_extract_max_chars > 20000:
+            return _redirect_index_with_context("Keyword extraction max OCR chars must be 1200..20000", next_query)
+        if keyword_extract_limit < 8 or keyword_extract_limit > 80:
+            return _redirect_index_with_context("Keyword/phrase count must be 8..80", next_query)
 
         try:
             per_type_data = json.loads(per_type_conf_raw)
             keyword_overrides_data = json.loads(keyword_overrides_raw)
             negative_keywords_data = json.loads(negative_keywords_raw)
+            public_acronym_overrides_data = json.loads(public_acronym_overrides_raw)
         except json.JSONDecodeError:
             return _redirect_index_with_context("Advanced AI settings must be valid JSON", next_query)
 
@@ -1591,6 +1762,8 @@ def create_app(cfg: AppConfig, config_path: Path) -> Flask:
             return _redirect_index_with_context("Keyword overrides must be a JSON object", next_query)
         if not isinstance(negative_keywords_data, dict):
             return _redirect_index_with_context("Negative type keywords must be a JSON object", next_query)
+        if not isinstance(public_acronym_overrides_data, dict):
+            return _redirect_index_with_context("Public acronym overrides must be a JSON object", next_query)
 
         per_type_clean: dict[str, float] = {}
         for k, v in per_type_data.items():
@@ -1623,6 +1796,18 @@ def create_app(cfg: AppConfig, config_path: Path) -> Flask:
             if cleaned:
                 negative_keywords_clean[dt] = cleaned
 
+        public_acronym_overrides_clean: dict[str, str] = {}
+        for k, v in public_acronym_overrides_data.items():
+            key = str(k).strip().lower()
+            val = str(v).strip().lower()
+            if not key or not val:
+                continue
+            if not re.fullmatch(r"[a-z0-9][a-z0-9._-]{1,20}", key):
+                return _redirect_index_with_context(f"Invalid acronym key '{key}'", next_query)
+            if val not in cfg.rules.allowed_doc_types:
+                return _redirect_index_with_context(f"Unknown target type '{val}' for acronym '{key}'", next_query)
+            public_acronym_overrides_clean[key] = val
+
         raw = _load_raw_config(config_path)
         raw.setdefault("llm", {})
         raw["llm"]["min_confidence_autofile"] = round(confidence, 3)
@@ -1638,6 +1823,17 @@ def create_app(cfg: AppConfig, config_path: Path) -> Flask:
         raw["ocr"]["deskew"] = bool(ocr_deskew)
         raw["ocr"]["clean"] = bool(ocr_clean)
         raw["ocr"]["extra_args"] = ocr_extra_args
+        raw.setdefault("recognition", {})
+        raw["recognition"]["keyword_extract_max_chars"] = int(keyword_extract_max_chars)
+        raw["recognition"]["keyword_extract_limit"] = int(keyword_extract_limit)
+        raw["recognition"]["keyword_extract_include_phrases"] = bool(keyword_extract_include_phrases)
+        raw["recognition"]["infer_year_from_text"] = bool(infer_year_from_text)
+        raw.setdefault("learning", {})
+        raw["learning"]["enabled"] = bool(learning_from_move_enabled)
+        raw.setdefault("public_knowledge", {})
+        raw["public_knowledge"]["enabled"] = bool(public_knowledge_enabled)
+        raw["public_knowledge"]["online_lookup_enabled"] = bool(public_online_lookup_enabled)
+        raw["public_knowledge"]["acronym_overrides"] = public_acronym_overrides_clean
         _save_raw_config(config_path, raw)
 
         cfg.llm.min_confidence_autofile = round(confidence, 3)
@@ -1651,8 +1847,82 @@ def create_app(cfg: AppConfig, config_path: Path) -> Flask:
         cfg.ocr.deskew = bool(ocr_deskew)
         cfg.ocr.clean = bool(ocr_clean)
         cfg.ocr.extra_args = ocr_extra_args
+        cfg.keyword_extract_max_chars = int(keyword_extract_max_chars)
+        cfg.keyword_extract_limit = int(keyword_extract_limit)
+        cfg.keyword_extract_include_phrases = bool(keyword_extract_include_phrases)
+        cfg.infer_year_from_text = bool(infer_year_from_text)
+        cfg.learning_from_move_enabled = bool(learning_from_move_enabled)
+        cfg.public_knowledge_enabled = bool(public_knowledge_enabled)
+        cfg.public_online_lookup_enabled = bool(public_online_lookup_enabled)
+        cfg.public_acronym_overrides = public_acronym_overrides_clean
 
         return _redirect_index_with_context("AI/OCR tuning updated", next_query)
+
+    @app.post("/setup/runtime")
+    def setup_runtime():
+        next_query = request.form.get("next", "").strip()
+        poll_seconds_raw = request.form.get("poll_seconds", "").strip() or str(cfg.poll_seconds)
+        inbox_settle_raw = request.form.get("inbox_settle_seconds", "").strip() or str(cfg.inbox_settle_seconds)
+        require_size_stability = request.form.get("require_size_stability", "off") == "on"
+        stable_cycles_raw = request.form.get("stable_cycles_required", "").strip() or str(cfg.stable_cycles_required)
+        log_level = request.form.get("log_level", "").strip().upper() or str(cfg.log_level).upper()
+        llm_enabled = request.form.get("llm_enabled", "off") == "on"
+        llm_timeout_raw = request.form.get("llm_timeout_seconds", "").strip() or str(cfg.llm.timeout_seconds)
+        llm_max_input_raw = request.form.get("llm_max_input_chars", "").strip() or str(cfg.llm.max_input_chars)
+        llm_command_template = request.form.get("llm_command_template", "").strip()
+        ocr_enabled = request.form.get("ocr_enabled", "off") == "on"
+
+        try:
+            poll_seconds = int(poll_seconds_raw)
+            inbox_settle_seconds = int(inbox_settle_raw)
+            stable_cycles_required = int(stable_cycles_raw)
+            llm_timeout_seconds = int(llm_timeout_raw)
+            llm_max_input_chars = int(llm_max_input_raw)
+        except ValueError:
+            return _redirect_index_with_context("Runtime settings must be numeric where expected", next_query)
+
+        if poll_seconds < 1 or poll_seconds > 60:
+            return _redirect_index_with_context("poll_seconds must be 1..60", next_query)
+        if inbox_settle_seconds < 0 or inbox_settle_seconds > 600:
+            return _redirect_index_with_context("inbox_settle_seconds must be 0..600", next_query)
+        if stable_cycles_required < 1 or stable_cycles_required > 10:
+            return _redirect_index_with_context("stable_cycles_required must be 1..10", next_query)
+        if llm_timeout_seconds < 30 or llm_timeout_seconds > 1200:
+            return _redirect_index_with_context("LLM timeout must be 30..1200 seconds", next_query)
+        if llm_max_input_chars < 600 or llm_max_input_chars > 20000:
+            return _redirect_index_with_context("LLM max input chars must be 600..20000", next_query)
+        if log_level not in {"DEBUG", "INFO", "WARNING", "ERROR"}:
+            return _redirect_index_with_context("log_level must be DEBUG, INFO, WARNING, or ERROR", next_query)
+        if llm_enabled and not llm_command_template:
+            return _redirect_index_with_context("LLM command template cannot be empty when LLM is enabled", next_query)
+
+        raw = _load_raw_config(config_path)
+        raw["poll_seconds"] = poll_seconds
+        raw["inbox_settle_seconds"] = inbox_settle_seconds
+        raw["require_size_stability"] = bool(require_size_stability)
+        raw["stable_cycles_required"] = stable_cycles_required
+        raw["log_level"] = log_level
+        raw.setdefault("llm", {})
+        raw["llm"]["enabled"] = bool(llm_enabled)
+        raw["llm"]["timeout_seconds"] = llm_timeout_seconds
+        raw["llm"]["max_input_chars"] = llm_max_input_chars
+        raw["llm"]["command_template"] = llm_command_template
+        raw.setdefault("ocr", {})
+        raw["ocr"]["enabled"] = bool(ocr_enabled)
+        _save_raw_config(config_path, raw)
+
+        cfg.poll_seconds = poll_seconds
+        cfg.inbox_settle_seconds = inbox_settle_seconds
+        cfg.require_size_stability = bool(require_size_stability)
+        cfg.stable_cycles_required = stable_cycles_required
+        cfg.log_level = log_level
+        cfg.llm.enabled = bool(llm_enabled)
+        cfg.llm.timeout_seconds = llm_timeout_seconds
+        cfg.llm.max_input_chars = llm_max_input_chars
+        cfg.llm.command_template = llm_command_template
+        cfg.ocr.enabled = bool(ocr_enabled)
+
+        return _redirect_index_with_context("Runtime/engine settings updated", next_query)
 
     @app.get("/api/user-inboxes")
     def api_user_inboxes():
@@ -1923,6 +2193,14 @@ def create_app(cfg: AppConfig, config_path: Path) -> Flask:
         if not src.exists():
             return _redirect_index_with_context("Source file not found", next_query)
 
+        learning_keywords: list[str] = []
+        index = _load_keyword_index(cfg)
+        rec = index.get("records", {}).get(f"{src_bucket}:{rel_path}", {})
+        if isinstance(rec, dict):
+            maybe_keywords = rec.get("manual_keywords") or rec.get("keywords") or []
+            if isinstance(maybe_keywords, list):
+                learning_keywords = [str(k) for k in maybe_keywords]
+
         if target_bucket == "archive":
             safe_sender = "".join(c if c.isalnum() or c in "._-" else "_" for c in target_sender).strip("_") or "unknown"
             safe_type = "".join(c if c.isalnum() or c in "._-" else "_" for c in target_type).strip("_") or cfg.rules.unknown_doc_type
@@ -1937,11 +2215,26 @@ def create_app(cfg: AppConfig, config_path: Path) -> Flask:
         shutil.move(str(src), str(dst))
         _record_manual_action(cfg, [src, dst])
         learned = 0
-        if target_bucket == "archive" and src_bucket in {"review", "rejected"}:
+        learned_profile = False
+        if cfg.learning_from_move_enabled and target_bucket == "archive" and src_bucket in {"review", "rejected"}:
             learned = _learn_keyword_overrides_from_manual_move(cfg, config_path, src_bucket, rel_path, safe_type)
+        if cfg.learning_from_move_enabled and target_bucket == "archive":
+            learned_profile = record_manual_learning(
+                cfg,
+                target_type=safe_type,
+                target_sender=safe_sender,
+                inbox_user=src_user,
+                source_pdf=dst,
+                seed_keywords=learning_keywords,
+            )
         if learned:
+            msg = f"Moved to {target_bucket}: {dst.name}. Learned {learned} keyword override(s)."
+            if learned_profile:
+                msg += " Added manual-learning example."
+            return _redirect_index_with_context(msg, next_query)
+        if learned_profile:
             return _redirect_index_with_context(
-                f"Moved to {target_bucket}: {dst.name}. Learned {learned} keyword override(s).",
+                f"Moved to {target_bucket}: {dst.name}. Added manual-learning example.",
                 next_query,
             )
         return _redirect_index_with_context(f"Moved to {target_bucket}: {dst.name}", next_query)
@@ -2021,6 +2314,60 @@ def create_app(cfg: AppConfig, config_path: Path) -> Flask:
 
         return _redirect_index_with_context("No documents were transferred", next_query)
 
+    @app.post("/reclassify-bulk")
+    def reclassify_bulk():
+        next_query = request.form.get("next", "").strip()
+        selected = request.form.getlist("selected")
+
+        if not selected:
+            return _redirect_index_with_context("No documents selected", next_query)
+
+        roots = _roots(cfg)
+        queued = 0
+        skipped = 0
+
+        for item in selected:
+            if "|" not in item:
+                skipped += 1
+                continue
+            src_bucket, rel_path = item.split("|", 1)
+            src_bucket = src_bucket.strip()
+            rel_path = rel_path.strip()
+            if src_bucket not in roots or not rel_path:
+                skipped += 1
+                continue
+
+            try:
+                src_root, rel_local, _ = _resolve_doc_source(cfg, src_bucket, rel_path)
+                if not rel_local:
+                    skipped += 1
+                    continue
+                src = _safe_join(src_root, rel_local)
+            except Exception:
+                skipped += 1
+                continue
+
+            if not src.exists() or not src.is_file():
+                skipped += 1
+                continue
+
+            inbox_user = _infer_inbox_user_from_rel(cfg, rel_path)
+            moved = _requeue_parts_to_inbox(cfg, [src], inbox_user=inbox_user)
+            if not moved:
+                skipped += 1
+                continue
+
+            _record_manual_action(cfg, [src, moved[0]])
+            queued += 1
+
+        if queued:
+            msg = f"Queued {queued} document(s) for reclassification"
+            if skipped:
+                msg += f" ({skipped} skipped)"
+            return _redirect_index_with_context(msg, next_query)
+
+        return _redirect_index_with_context("No documents were queued for reclassification", next_query)
+
     @app.get("/open")
     def open_document():
         src_bucket = request.args.get("bucket", "")
@@ -2042,6 +2389,35 @@ def create_app(cfg: AppConfig, config_path: Path) -> Flask:
             abort(404)
 
         return send_file(src, mimetype="application/pdf", as_attachment=False, download_name=src.name)
+
+    @app.post("/reclassify")
+    def reclassify_document():
+        next_query = request.form.get("next", "").strip()
+        src_bucket = request.form.get("src_bucket", "")
+        rel_path = request.form.get("rel_path", "")
+        roots = _roots(cfg)
+
+        if src_bucket not in roots:
+            return _redirect_index_with_context("Invalid source bucket for reclassification", next_query)
+
+        try:
+            src_root, rel_local, _ = _resolve_doc_source(cfg, src_bucket, rel_path)
+            if not rel_local:
+                return _redirect_index_with_context("Invalid source path", next_query)
+            src = _safe_join(src_root, rel_local)
+        except ValueError:
+            return _redirect_index_with_context("Invalid source path", next_query)
+
+        if not src.exists() or not src.is_file():
+            return _redirect_index_with_context("File not found for reclassification", next_query)
+
+        inbox_user = _infer_inbox_user_from_rel(cfg, rel_path)
+        moved = _requeue_parts_to_inbox(cfg, [src], inbox_user=inbox_user)
+        if not moved:
+            return _redirect_index_with_context("Failed to queue document for reclassification", next_query)
+
+        _record_manual_action(cfg, [src, moved[0]])
+        return _redirect_index_with_context(f"Queued for reclassification: {moved[0].name}", next_query)
 
     @app.post("/split")
     def split_document():
@@ -2142,16 +2518,31 @@ def create_app(cfg: AppConfig, config_path: Path) -> Flask:
 
     @app.post("/splitter-settings")
     def update_splitter_settings():
+        next_query = request.form.get("next", "").strip()
         enabled = request.form.get("splitter_enabled", "off") == "on"
         min_pages_raw = request.form.get("min_pages_to_split", "").strip() or "3"
         max_chars_raw = request.form.get("max_first_page_chars", "").strip() or "700"
         keywords_raw = request.form.get("boundary_keywords", "").strip()
+        content_aware_enabled = request.form.get("content_aware_enabled", "off") == "on"
+        boundary_score_raw = request.form.get("boundary_score_threshold", "").strip() or str(cfg.splitter.boundary_score_threshold)
+        low_similarity_raw = request.form.get("low_similarity_threshold", "").strip() or str(cfg.splitter.low_similarity_threshold)
 
         try:
             min_pages = max(2, int(min_pages_raw))
             max_chars = max(200, int(max_chars_raw))
+            boundary_score = float(boundary_score_raw)
+            low_similarity = float(low_similarity_raw)
         except ValueError:
-            return redirect(url_for("index", msg="Splitter settings must be numeric"))
+            return _redirect_index_with_context("Splitter settings must be numeric", next_query)
+
+        if min_pages > 40:
+            return _redirect_index_with_context("min_pages_to_split must be 2..40", next_query)
+        if max_chars > 8000:
+            return _redirect_index_with_context("max_first_page_chars must be 200..8000", next_query)
+        if boundary_score < 0.4 or boundary_score > 2.0:
+            return _redirect_index_with_context("boundary_score_threshold must be 0.4..2.0", next_query)
+        if low_similarity < 0.05 or low_similarity > 0.8:
+            return _redirect_index_with_context("low_similarity_threshold must be 0.05..0.8", next_query)
 
         keywords = [k.strip() for k in keywords_raw.split(",") if k.strip()]
         if not keywords:
@@ -2163,6 +2554,9 @@ def create_app(cfg: AppConfig, config_path: Path) -> Flask:
             "min_pages_to_split": min_pages,
             "max_first_page_chars": max_chars,
             "boundary_keywords": keywords,
+            "content_aware_enabled": bool(content_aware_enabled),
+            "boundary_score_threshold": round(boundary_score, 3),
+            "low_similarity_threshold": round(low_similarity, 3),
         }
         _save_raw_config(config_path, raw)
 
@@ -2170,8 +2564,11 @@ def create_app(cfg: AppConfig, config_path: Path) -> Flask:
         cfg.splitter.min_pages_to_split = min_pages
         cfg.splitter.max_first_page_chars = max_chars
         cfg.splitter.boundary_keywords = keywords
+        cfg.splitter.content_aware_enabled = bool(content_aware_enabled)
+        cfg.splitter.boundary_score_threshold = round(boundary_score, 3)
+        cfg.splitter.low_similarity_threshold = round(low_similarity, 3)
 
-        return redirect(url_for("index", msg="Updated splitter settings"))
+        return _redirect_index_with_context("Updated splitter settings", next_query)
 
     return app
 
