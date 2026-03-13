@@ -36,7 +36,11 @@ class LLMConfig:
     timeout_seconds: int
     max_input_chars: int
     min_confidence_autofile: float
+    classification_descriptor: str
     classification_guidance: str
+    category_suggestion_enabled: bool
+    auto_create_suggested_categories: bool
+    auto_create_min_confidence: float
 
 
 @dataclass
@@ -108,7 +112,16 @@ def load_config(config_path: Path) -> AppConfig:
         timeout_seconds=int(llm_raw.get("timeout_seconds", 240)),
         max_input_chars=int(llm_raw.get("max_input_chars", 2800)),
         min_confidence_autofile=float(llm_raw.get("min_confidence_autofile", 0.60)),
+        classification_descriptor=str(
+            llm_raw.get(
+                "classification_descriptor",
+                "You are an AI document filing assistant. Classify each document by meaning and context, not by isolated words.",
+            )
+        ).strip(),
         classification_guidance=str(llm_raw.get("classification_guidance", "")).strip(),
+        category_suggestion_enabled=bool(llm_raw.get("category_suggestion_enabled", True)),
+        auto_create_suggested_categories=bool(llm_raw.get("auto_create_suggested_categories", False)),
+        auto_create_min_confidence=max(0.0, min(1.0, float(llm_raw.get("auto_create_min_confidence", 0.93)))),
     )
     splitter_raw: dict[str, Any] = raw.get("splitter", {})
     splitter = SplitterConfig(

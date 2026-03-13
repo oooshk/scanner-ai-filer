@@ -67,6 +67,41 @@ STOPWORDS = {
     "statement", "document", "page", "of", "to", "in", "on", "at", "by", "or", "is", "as", "be", "it", "an", "a",
 }
 
+LOW_SIGNAL_OVERRIDE_WORDS = {
+    "act",
+    "age",
+    "after",
+    "affect",
+    "address",
+    "car",
+    "income",
+    "may",
+    "parts",
+    "take",
+    "total",
+}
+
+ALLOWED_SINGLE_WORD_OVERRIDES = {"dvsa", "hmrc", "nhs", "v5c", "vin", "mot"}
+
+
+def _is_high_signal_override_phrase(value: str) -> bool:
+    token = re.sub(r"\s+", " ", str(value).strip().lower())
+    if len(token) < 3:
+        return False
+    if not re.fullmatch(r"[a-z0-9._ -]{3,80}", token):
+        return False
+    if token in LOW_SIGNAL_OVERRIDE_WORDS:
+        return False
+    parts = token.split(" ")
+    if len(parts) >= 2:
+        return True
+    single = parts[0]
+    if single in ALLOWED_SINGLE_WORD_OVERRIDES:
+        return True
+    if len(single) < 5:
+        return False
+    return single not in LOW_SIGNAL_OVERRIDE_WORDS
+
 
 CATEGORY_HINTS: dict[str, list[str]] = {
     "council_tax": ["council tax", "local authority", "council", "rates"],
@@ -367,7 +402,7 @@ def _save_manual_actions(cfg: AppConfig, actions: dict[str, float]) -> None:
 
 
 def _record_manual_action(cfg: AppConfig, paths: list[Path]) -> None:
-    now = datetime.utcnow().timestamp()
+    now = datetime.now(timezone.utc).timestamp()
     actions = _load_manual_actions(cfg)
     for p in paths:
         actions[str(p.resolve())] = now
@@ -383,7 +418,7 @@ def _load_recent_autofile_events(cfg: AppConfig, window_seconds: int = 3600) -> 
     path = cfg.paths.state / "events.jsonl"
     if not path.exists():
         return {}
-    now = datetime.utcnow().timestamp()
+    now = datetime.now(timezone.utc).timestamp()
     out: dict[str, float] = {}
     try:
         with path.open("r", encoding="utf-8") as f:
@@ -471,6 +506,8 @@ def _learn_keyword_overrides_from_manual_move(
 
     added = 0
     for w in clean_words[:5]:
+        if not _is_high_signal_override_phrase(w):
+            continue
         if w in overrides:
             continue
         overrides[w] = target_type
@@ -904,8 +941,8 @@ def _get_auth_accounts(data: dict) -> list[dict[str, str]]:
 
 def _save_auth_accounts(cfg: AppConfig, accounts: list[dict[str, str]]) -> None:
     existing = _load_security_config(cfg)
-    created_utc = str(existing.get("created_utc", "")).strip() or datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
-    now = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    created_utc = str(existing.get("created_utc", "")).strip() or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     payload = {
         "accounts": accounts,
         "created_utc": created_utc,
@@ -1060,14 +1097,37 @@ def _apply_restored_config(cfg: AppConfig, config_path: Path) -> None:
     cfg.stable_cycles_required = new_cfg.stable_cycles_required
     cfg.log_level = new_cfg.log_level
     ensure_directories(cfg)
+    
+def _load_or_create_web_secret(cfg: AppConfig) -> str:
+    env_secret = os.environ.get("SCANNER_WEB_SECRET", "").strip()
+    if env_secret:
+        return env_secret
+
+    secret_path = cfg.paths.state / "web_secret.txt"
+    try:
+        if secret_path.exists():
+            existing = secret_path.read_text(encoding="utf-8").strip()
+            if existing:
+                return existing
+
+        secret_path.parent.mkdir(parents=True, exist_ok=True)
+        generated = secrets.token_hex(32)
+        secret_path.write_text(generated + "\n", encoding="utf-8")
+        try:
+            os.chmod(secret_path, 0o600)
+        except OSError:
+            pass
+        return generated
+    except Exception:
+        # Last-resort fallback keeps app usable even if state storage is unavailable.
+        return secrets.token_hex(32)
 
 
 def create_app(cfg: AppConfig, config_path: Path) -> Flask:
     app = Flask(__name__, template_folder="templates", static_folder="static")
-    secret = os.environ.get("SCANNER_WEB_SECRET", "")
-    if not secret:
-        secret = os.urandom(32).hex()
-        app.logger.warning("SCANNER_WEB_SECRET is not set; using an ephemeral secret")
+    secret = _load_or_create_web_secret(cfg)
+    if not os.environ.get("SCANNER_WEB_SECRET", "").strip():
+        app.logger.warning("SCANNER_WEB_SECRET is not set; using persisted local secret from state storage")
     app.secret_key = secret
     app.config["SESSION_COOKIE_HTTPONLY"] = True
     app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
@@ -1275,7 +1335,11 @@ def create_app(cfg: AppConfig, config_path: Path) -> Flask:
                 "nas_user": "",
                 "security_user": str(session.get("auth_user", "admin")),
                 "ai_confidence": float(cfg.llm.min_confidence_autofile),
+                "ai_descriptor": str(cfg.llm.classification_descriptor),
                 "ai_guidance": str(cfg.llm.classification_guidance),
+                "ai_category_suggestion_enabled": bool(cfg.llm.category_suggestion_enabled),
+                "ai_auto_create_suggested_categories": bool(cfg.llm.auto_create_suggested_categories),
+                "ai_auto_create_min_confidence": float(cfg.llm.auto_create_min_confidence),
                 "ai_per_type_conf": json.dumps(cfg.rules.per_type_min_confidence, ensure_ascii=True, indent=2),
                 "ai_keyword_overrides": json.dumps(cfg.rules.keyword_overrides, ensure_ascii=True, indent=2),
                 "ai_negative_keywords": json.dumps(cfg.rules.negative_type_keywords, ensure_ascii=True, indent=2),
@@ -1550,7 +1614,7 @@ def create_app(cfg: AppConfig, config_path: Path) -> Flask:
     @app.post("/setup/backup/export")
     def export_backup():
         include_documents = request.form.get("include_documents", "off") == "on"
-        stamp = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         filename = f"scanner-backup-{stamp}.tar.gz"
 
         buffer = BytesIO()
@@ -1710,7 +1774,11 @@ def create_app(cfg: AppConfig, config_path: Path) -> Flask:
     def setup_ai():
         next_query = request.form.get("next", "").strip()
         confidence_raw = request.form.get("min_confidence_autofile", "").strip()
+        descriptor = request.form.get("classification_descriptor", "").strip()
         guidance = request.form.get("classification_guidance", "").strip()
+        category_suggestion_enabled = request.form.get("category_suggestion_enabled", "off") == "on"
+        auto_create_suggested_categories = request.form.get("auto_create_suggested_categories", "off") == "on"
+        auto_create_min_confidence_raw = request.form.get("auto_create_min_confidence", "").strip() or str(cfg.llm.auto_create_min_confidence)
         per_type_conf_raw = request.form.get("per_type_min_confidence", "").strip() or "{}"
         keyword_overrides_raw = request.form.get("keyword_overrides", "").strip() or "{}"
         negative_keywords_raw = request.form.get("negative_type_keywords", "").strip() or "{}"
@@ -1731,11 +1799,16 @@ def create_app(cfg: AppConfig, config_path: Path) -> Flask:
 
         try:
             confidence = float(confidence_raw)
+            auto_create_min_confidence = float(auto_create_min_confidence_raw)
         except ValueError:
             return _redirect_index_with_context("AI confidence threshold must be a number between 0 and 1", next_query)
 
         if confidence < 0.0 or confidence > 1.0:
             return _redirect_index_with_context("AI confidence threshold must be between 0 and 1", next_query)
+        if auto_create_min_confidence < 0.0 or auto_create_min_confidence > 1.0:
+            return _redirect_index_with_context("Auto-create confidence must be between 0 and 1", next_query)
+        if len(descriptor) > 2000:
+            return _redirect_index_with_context("AI descriptor is too long (max 2000 characters)", next_query)
         if len(guidance) > 2000:
             return _redirect_index_with_context("AI guidance is too long (max 2000 characters)", next_query)
         try:
@@ -1783,7 +1856,7 @@ def create_app(cfg: AppConfig, config_path: Path) -> Flask:
         for k, v in keyword_overrides_data.items():
             key = str(k).strip().lower()
             val = str(v).strip().lower()
-            if key and val:
+            if key and val and _is_high_signal_override_phrase(key):
                 keyword_overrides_clean[key] = val
 
         negative_keywords_clean: dict[str, list[str]] = {}
@@ -1812,7 +1885,11 @@ def create_app(cfg: AppConfig, config_path: Path) -> Flask:
         raw = _load_raw_config(config_path)
         raw.setdefault("llm", {})
         raw["llm"]["min_confidence_autofile"] = round(confidence, 3)
+        raw["llm"]["classification_descriptor"] = descriptor
         raw["llm"]["classification_guidance"] = guidance
+        raw["llm"]["category_suggestion_enabled"] = bool(category_suggestion_enabled)
+        raw["llm"]["auto_create_suggested_categories"] = bool(auto_create_suggested_categories)
+        raw["llm"]["auto_create_min_confidence"] = round(auto_create_min_confidence, 3)
         raw.setdefault("rules", {})
         raw["rules"]["per_type_min_confidence"] = per_type_clean
         raw["rules"]["keyword_overrides"] = keyword_overrides_clean
@@ -1838,7 +1915,11 @@ def create_app(cfg: AppConfig, config_path: Path) -> Flask:
         _save_raw_config(config_path, raw)
 
         cfg.llm.min_confidence_autofile = round(confidence, 3)
+        cfg.llm.classification_descriptor = descriptor
         cfg.llm.classification_guidance = guidance
+        cfg.llm.category_suggestion_enabled = bool(category_suggestion_enabled)
+        cfg.llm.auto_create_suggested_categories = bool(auto_create_suggested_categories)
+        cfg.llm.auto_create_min_confidence = round(auto_create_min_confidence, 3)
         cfg.rules.per_type_min_confidence = per_type_clean
         cfg.rules.keyword_overrides = keyword_overrides_clean
         cfg.rules.negative_type_keywords = negative_keywords_clean

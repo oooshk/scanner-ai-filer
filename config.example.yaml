@@ -22,8 +22,15 @@ llm:
   timeout_seconds: 240
   max_input_chars: 2800
   min_confidence_autofile: 0.60
+  # Primary role/mission for the classifier prompt.
+  classification_descriptor: "You are an AI document filing assistant. Classify by semantic intent, not by isolated words."
   # Optional extra instructions for edge cases (for example: "MOT certificates are vehicles, never invoice")
   classification_guidance: ""
+  # Allow the model to propose a new category name when no allowed type fits.
+  category_suggestion_enabled: true
+  # If true, a suggested category can be added automatically when confidence is high.
+  auto_create_suggested_categories: false
+  auto_create_min_confidence: 0.93
   # llama.cpp mode: keep {prompt} exactly as-is.
   # Option A – Ollama (recommended, no JSON schema flag needed):
   # command_template: ollama run qwen2.5:3b-instruct

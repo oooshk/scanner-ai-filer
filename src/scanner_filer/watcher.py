@@ -64,7 +64,7 @@ def _is_size_stable(path: Path, cfg: AppConfig) -> bool:
     return stable_cycles >= cfg.stable_cycles_required
 
 
-def process_pending(cfg: AppConfig) -> int:
+def process_pending(cfg: AppConfig, config_path: Path | None = None) -> int:
     count = 0
     recovered = _recover_orphan_processing(cfg)
     if recovered:
@@ -88,7 +88,7 @@ def process_pending(cfg: AppConfig) -> int:
             logger.debug("Skipping %s (size not yet stable)", entry.name)
             continue
         try:
-            process_one_file(entry, cfg)
+            process_one_file(entry, cfg, config_path=config_path)
             count += 1
         except Exception as exc:  # pragma: no cover
             logger.exception("Failed to process %s: %s", entry, exc)
@@ -112,6 +112,15 @@ def run_polling_watcher(cfg: AppConfig) -> None:
     logger.info("Watching %s", cfg.paths.inbox)
     while True:
         processed = process_pending(cfg)
+        if processed:
+            logger.info("Processed %s file(s) in this cycle", processed)
+        time.sleep(cfg.poll_seconds)
+
+
+def run_polling_watcher_with_config(cfg: AppConfig, config_path: Path) -> None:
+    logger.info("Watching %s", cfg.paths.inbox)
+    while True:
+        processed = process_pending(cfg, config_path=config_path)
         if processed:
             logger.info("Processed %s file(s) in this cycle", processed)
         time.sleep(cfg.poll_seconds)

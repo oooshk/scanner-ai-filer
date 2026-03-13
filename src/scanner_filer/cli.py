@@ -5,7 +5,7 @@ from pathlib import Path
 
 from .config import ensure_directories, load_config
 from .logging_utils import configure_logging
-from .watcher import process_pending, run_polling_watcher
+from .watcher import process_pending, run_polling_watcher_with_config
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -27,10 +27,10 @@ def main() -> int:
     configure_logging(cfg.log_level)
 
     if args.command == "run-once":
-        process_pending(cfg)
+        process_pending(cfg, config_path=Path(args.config))
         return 0
 
-    run_polling_watcher(cfg)
+    run_polling_watcher_with_config(cfg, Path(args.config))
     return 0
 
 

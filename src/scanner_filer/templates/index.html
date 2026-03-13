@@ -123,7 +123,7 @@
             <p><em>Tip: leave the sender field blank if unknown — it will be filled as "unknown" in the folder path.</em></p>
 
             <h4>Add Category</h4>
-            <p>Adds a new document type/category to the allowed list so the AI can classify future documents into it. The category name must be lowercase letters, numbers, or underscores (2–40 chars). Takes effect immediately for the UI; restart the scanner-filer service to use it in classification.</p>
+            <p>Adds a new document type/category to the allowed list so the AI can classify future documents into it. The category name must be lowercase letters, numbers, underscores, or spaces (2–40 chars). Takes effect immediately for the UI; restart the scanner-filer service to use it in classification.</p>
 
             <h4>Split + Reprocess</h4>
             <p>Splits the PDF at the page numbers you specify (1-based, comma-separated, e.g. <code>1,4,7</code>) and sends each part back to the inbox for independent reprocessing. Use this when the scanner has merged multiple documents into one PDF. Each part is processed separately and filed according to its own content.</p>
@@ -141,13 +141,23 @@
           <div class="help-body">
             <p>The classification pipeline runs in this order:</p>
             <ol>
-              <li><strong>Manual learning check</strong> — if a previous manual move produced a strong keyword overlap (&ge;0.75) with this document, that classification is used directly (no LLM call).</li>
-              <li><strong>Keyword override rules</strong> — if any phrase from the document exactly matches a configured override (e.g. <code>"mot test certificate" → vehicles</code>), that type is applied directly.</li>
-              <li><strong>Negative keyword filter</strong> — configured negative keywords can block a type from being assigned even if other signals suggest it.</li>
-              <li><strong>LLM classification</strong> — the local Qwen2.5 model reads the first portion of the OCR text and outputs a document type and confidence score.</li>
-              <li><strong>Public knowledge assist</strong> — if enabled, scans for ALL-CAPS acronyms (e.g. pension scheme names, agencies, insurers) and checks your configured <em>Acronym Override Map</em> (local/offline). This maps known acronyms directly to document types.</li>
-              <li><strong>Fallback</strong> — if confidence is below threshold, the document is sent to Review.</li>
+              <li><strong>LLM classification (primary)</strong> — the local model reads OCR text and makes the first classification decision.</li>
+              <li><strong>AI ruleset guidance in prompt</strong> — the model receives your configured role descriptor, guidance, and AI ruleset context while deciding.</li>
+              <li><strong>Manual learning correction</strong> — if prior manual moves strongly match this document, the learned type can override to keep future filing consistent.</li>
+              <li><strong>Safety guards</strong> — negative keywords can downgrade risky classifications to Review.</li>
+              <li><strong>Public knowledge assist (optional)</strong> — if enabled, acronym hints are used mainly for weak/unknown outcomes.</li>
+              <li><strong>Keyword fallback (last resort)</strong> — keyword heuristics are used only when the LLM is disabled, times out, fails, or returns unusable output.</li>
+              <li><strong>Filing threshold</strong> — if final confidence is below threshold, the document is sent to Review instead of Archive.</li>
             </ol>
+            <h4>LLM Role Descriptor</h4>
+            <p>This field defines the classifier's mission in plain language (for example: classify by semantic intent first, avoid keyword-only guesses). Use it for stable, top-level behavior; use <em>Classification Guidance</em> for edge cases and exceptions.</p>
+            <h4>Category Suggestions (New)</h4>
+            <p>If the LLM is confident a document does not fit any existing category, it can suggest a new category name (snake_case). In Setup you can choose one of two modes:</p>
+            <ul>
+              <li><strong>Suggest only</strong> — the system records the suggestion metadata, but does not change your allowed category list automatically.</li>
+              <li><strong>Auto-create on high confidence</strong> — if enabled, suggested categories are added automatically only when suggestion confidence is above your configured threshold.</li>
+            </ul>
+            <p><strong>Recommended:</strong> start with Suggest only, review behavior for a few days, then enable auto-create if suggestions are consistently accurate.</p>
             <h4>Confidence Threshold</h4>
             <p>Set in Setup → AI Filing Behaviour. Documents with a confidence score below this value go to Review instead of Archive.</p>
             <h4>Public Acronym Options (Important Difference)</h4>
@@ -164,7 +174,7 @@
               <li><strong>Infer year from text</strong> — scans OCR text for the most common year reference and uses it as the default move year.</li>
             </ul>
             <h4>Keyword Override Rules</h4>
-            <p>A JSON map of <code>"phrase": "type"</code> entries. If any phrase is found in a document's OCR text, the document is classified as that type with high confidence, bypassing the LLM. Example: <code>{"mot test certificate": "vehicles", "acronym_name": "pension"}</code>.</p>
+            <p>A JSON map of <code>"phrase": "type"</code> entries. These are now treated as controlled override hints and are mostly applied in fallback/low-signal paths rather than replacing strong LLM decisions. Keep phrases specific (multi-word) to avoid false positives. Example: <code>{"mot test certificate": "vehicles", "annual benefit statement": "pension"}</code>.</p>
             <h4>Negative Keywords</h4>
             <p>A JSON map of <code>"type": ["word1", "word2"]</code>. If a document would be classified as that type but any of those words appear in the text, the classification is rejected and the document goes to Review. Useful for preventing false positives.</p>
           </div>
@@ -570,7 +580,11 @@
             <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
             <input type="hidden" name="next" value="{{ return_query }}">
             <input type="number" min="0" max="1" step="0.01" name="min_confidence_autofile" value="{{ setup_defaults.ai_confidence }}" placeholder="Auto-file confidence threshold 0..1">
+            <textarea name="classification_descriptor" rows="4" placeholder="LLM role/mission descriptor (what the classifier must do first)">{{ setup_defaults.ai_descriptor }}</textarea>
             <textarea name="classification_guidance" rows="5" placeholder="Optional custom guidance for classifier">{{ setup_defaults.ai_guidance }}</textarea>
+            <label class="checkline"><input type="checkbox" name="category_suggestion_enabled" {% if setup_defaults.ai_category_suggestion_enabled %}checked{% endif %}> Allow LLM to suggest new categories when no existing type fits</label>
+            <label class="checkline"><input type="checkbox" name="auto_create_suggested_categories" {% if setup_defaults.ai_auto_create_suggested_categories %}checked{% endif %}> Auto-create suggested categories when confidence is very high</label>
+            <input type="number" min="0" max="1" step="0.01" name="auto_create_min_confidence" value="{{ setup_defaults.ai_auto_create_min_confidence }}" placeholder="Auto-create minimum confidence 0..1">
             <textarea name="per_type_min_confidence" rows="4" placeholder='JSON per-type confidence thresholds, e.g. {"vehicles": 0.8, "invoice": 0.7}'>{{ setup_defaults.ai_per_type_conf }}</textarea>
             <textarea name="keyword_overrides" rows="4" placeholder='JSON phrase->type overrides, e.g. {"mot test certificate":"vehicles"}'>{{ setup_defaults.ai_keyword_overrides }}</textarea>
             <textarea name="negative_type_keywords" rows="4" placeholder='JSON type->[keywords] blocks, e.g. {"invoice":["mot","dvsa"]}'>{{ setup_defaults.ai_negative_keywords }}</textarea>
