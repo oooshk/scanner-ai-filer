@@ -1,6 +1,6 @@
 # Home Document Ops Hub
 
-An AI-powered document filing system for Raspberry Pi. Drop scanned PDFs into an inbox folder; the system OCRs them, classifies them with a local LLM, and automatically files them into a folder hierarchy — with a clean web UI for review, manual overrides, and administration.
+An AI-powered document filing system for a self-hosted Linux box. Drop scanned PDFs into an inbox folder; the system OCRs them, classifies them with a local LLM, and automatically files them into a folder hierarchy — with a clean web UI for review, manual overrides, and administration.
 
 This code is provided as-is, without warranty or guarantee of fitness, security, or reliability; you are responsible for your own deployment, access controls, backups, and overall security integrity.
 
@@ -61,7 +61,7 @@ cifs-utils    samba        samba-common-bin  acl
 ## Install
 
 ```bash
-git clone https://github.com/oooshk/scanner-ai-filer.git <SCANNER_DIR>
+git clone <REPO_URL> <SCANNER_DIR>
 cd <SCANNER_DIR>
 chmod +x install.sh
 ./install.sh
@@ -115,7 +115,7 @@ chmod +x setup_smb_mount.sh
 ./setup_smb_mount.sh
 # or non-interactively (e.g. from the web UI Setup modal):
 ./setup_smb_mount.sh --non-interactive \
-  --nas-host 192.168.1.10 --nas-share Public \
+  --nas-host <NAS_HOST_OR_IP> --nas-share Public \
   --nas-user <nas_user> --mount-point /mnt/nas \
   --subdir "Filing" --password "<nas_password>"
 ```
@@ -124,7 +124,7 @@ chmod +x setup_smb_mount.sh
 
 ## Scanner Drop Share (optional)
 
-Expose `inbox/` as a Samba share so the scanner can write directly to the Pi:
+Expose `inbox/` as a Samba share so the scanner can write directly to your host machine:
 
 ```bash
 chmod +x setup_scanner_drop_share.sh
@@ -136,7 +136,7 @@ chmod +x setup_scanner_drop_share.sh
   --share-name scanner_inbox
 ```
 
-Point your scanner at `\\<PI_IP>\scanner_inbox`.
+Point your scanner at `\\<SCANNER_HOST>\scanner_inbox`.
 
 ---
 
@@ -163,7 +163,7 @@ python -m scanner_filer.cli --config config.yaml watch
 python -m scanner_filer.web --config config.yaml --host 0.0.0.0 --port 8090
 ```
 
-Open `http://<PI_IP>:8090` from any device on your LAN.
+Open `http://<SCANNER_HOST_OR_IP>:8090` from any device on your LAN.
 
 ---
 
@@ -192,7 +192,7 @@ Both services restart automatically on failure.
 | **Directory tree** | Expandable tree of all archived files with real-time filter |
 | **Search** | Filter by filename, sender, category, path, or OCR keywords |
 | **Setup (modal)** | Configure NAS mount and scanner share; run scripts from the browser |
-| **Backup / Restore** | Download a tar.gz snapshot of config + state; restore on a new Pi |
+| **Backup / Restore** | Download a tar.gz snapshot of config + state; restore on a new host |
 
 ---
 

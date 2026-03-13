@@ -16,7 +16,7 @@ Each user's documents are automatically routed to their own folder structure.
 
 ### 1. Access the Setup Modal
 
-1. Log in to the web UI at `http://192.168.1.x:8090`
+1. Log in to the web UI at `http://<SCANNER_HOST_OR_IP>:8090`
 2. Click the **Setup** button in the top right
 3. Open the **User Inboxes** section
 
@@ -41,7 +41,7 @@ Once you've added all user inboxes:
 1. In the **Apply Samba Shares** section, enter the **Samba password** for the scanner shares
 2. Click **Apply User Inboxes**
 
-This will create the actual Samba shares on your Raspberry Pi. Each share maps to its own folder:
+This will create the actual Samba shares on your host machine. Each share maps to its own folder:
 - `scanner_user_a` -> `<SCANNER_DIR>/inbox/user_a`
 - `scanner_user_b` -> `<SCANNER_DIR>/inbox/user_b`
 
