@@ -1920,7 +1920,7 @@ def create_app(cfg: AppConfig, config_path: Path) -> Flask:
         dst_dir.mkdir(parents=True, exist_ok=True)
         dst = _ensure_unique_destination(dst_dir / src.name)
 
-        os.replace(src, dst)
+        shutil.move(str(src), str(dst))
         _record_manual_action(cfg, [src, dst])
         learned = 0
         if target_bucket == "archive" and src_bucket in {"review", "rejected"}:
@@ -1995,7 +1995,7 @@ def create_app(cfg: AppConfig, config_path: Path) -> Flask:
                 skipped += 1
                 continue
 
-            os.replace(src, dst)
+            shutil.move(str(src), str(dst))
             _record_manual_action(cfg, [src, dst])
             moved += 1
 
