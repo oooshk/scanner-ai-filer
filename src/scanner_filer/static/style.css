@@ -220,6 +220,12 @@ button:hover {
   min-width: 220px;
 }
 
+.doc-list-controls {
+  display: flex;
+  gap: 8px;
+  padding: 0 10px 10px;
+}
+
 .queue-wrap {
   margin-bottom: 16px;
   border: 1px solid var(--line);

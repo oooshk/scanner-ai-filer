@@ -367,7 +367,7 @@
             {% if n.is_file %}
               <a class="tree-file" href="{{ url_for('open_document', bucket=n.bucket, rel_path=n.rel_path) }}" target="_blank" rel="noopener" title="{{ n.rel_path }}">{{ n.name }}</a>
             {% else %}
-              <details class="tree-node" {% if n.rel_path == '' %}open{% endif %}>
+              <details class="tree-node">
                 <summary>{{ n.name }}</summary>
                 {% if n.children %}
                   {{ render_nodes(n.children) }}
@@ -401,6 +401,10 @@
           </select>
           <button type="submit" id="bulk-move-submit">Transfer Selected</button>
           <small class="muted" id="bulk-selected-count">0 selected</small>
+        </div>
+        <div class="doc-list-controls">
+          <button type="button" id="docs-expand-all" class="tree-toggle-btn">Expand All Docs</button>
+          <button type="button" id="docs-collapse-all" class="tree-toggle-btn">Collapse All Docs</button>
         </div>
 
       <table>
@@ -612,6 +616,8 @@
     const bulkSelectedCount = document.getElementById('bulk-selected-count');
     const bulkMoveForm = document.getElementById('bulk-move-form');
     const bulkTargetUser = document.getElementById('bulk-target-user');
+    const docsExpandAllBtn = document.getElementById('docs-expand-all');
+    const docsCollapseAllBtn = document.getElementById('docs-collapse-all');
 
     function selectedDocCheckboxes() {
       return Array.from(document.querySelectorAll('.doc-select'));
@@ -691,6 +697,22 @@
     }
 
     updateSelectedCount();
+
+    function setAllDocRows(expanded) {
+      document.querySelectorAll('.doc-detail-row').forEach((row) => {
+        row.hidden = !expanded;
+      });
+    }
+
+    if (docsExpandAllBtn) {
+      docsExpandAllBtn.addEventListener('click', () => setAllDocRows(true));
+    }
+    if (docsCollapseAllBtn) {
+      docsCollapseAllBtn.addEventListener('click', () => setAllDocRows(false));
+    }
+
+    // Ensure document details always start collapsed on page load.
+    setAllDocRows(false);
 
     const treeFilter = document.getElementById('tree-filter');
     const treeExpandAllBtn = document.getElementById('tree-expand-all');

@@ -2,6 +2,8 @@
 
 An AI-powered document filing system for Raspberry Pi. Drop scanned PDFs into an inbox folder; the system OCRs them, classifies them with a local LLM, and automatically files them into a folder hierarchy — with a clean web UI for review, manual overrides, and administration.
 
+This code is provided as-is, without warranty or guarantee of fitness, security, or reliability; you are responsible for your own deployment, access controls, backups, and overall security integrity.
+
 ---
 
 ## Features
@@ -113,9 +115,9 @@ chmod +x setup_smb_mount.sh
 ./setup_smb_mount.sh
 # or non-interactively (e.g. from the web UI Setup modal):
 ./setup_smb_mount.sh --non-interactive \
-  --nas-host 192.168.1.101 --nas-share Public \
-  --nas-user guest --mount-point /mnt/nas \
-  --subdir "Home Filing" --password ""
+  --nas-host 192.168.1.10 --nas-share Public \
+  --nas-user <nas_user> --mount-point /mnt/nas \
+  --subdir "Filing" --password "<nas_password>"
 ```
 
 ---
@@ -129,7 +131,7 @@ chmod +x setup_scanner_drop_share.sh
 ./setup_scanner_drop_share.sh
 # or non-interactively:
 ./setup_scanner_drop_share.sh --non-interactive \
-  --scanner-user scanner --password s3cr3t \
+  --scanner-user scanner_user --password <scanner_share_password> \
   --inbox-dir /home/pi/scanner/inbox \
   --share-name scanner_inbox
 ```
