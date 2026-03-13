@@ -416,23 +416,28 @@ button:hover {
 }
 
 .doc-filename-cell {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   font-family: "IBM Plex Mono", monospace;
   font-size: 12px;
   max-width: 320px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 .doc-name {
   color: #2e3b4f;
+  flex: 1 1 auto;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .doc-open-link {
   font-size: 12px;
   color: #114b95;
   text-decoration: none;
-  margin-left: 4px;
+  flex: 0 0 auto;
   white-space: nowrap;
 }
 

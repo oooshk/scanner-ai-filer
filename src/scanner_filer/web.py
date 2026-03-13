@@ -1396,8 +1396,9 @@ def create_app(cfg: AppConfig, config_path: Path) -> Flask:
     def add_category():
         next_query = request.form.get("next", "").strip()
         new_category = request.form.get("new_category", "").strip().lower()
-        if not re.fullmatch(r"[a-z0-9_]{2,40}", new_category):
-            return _redirect_index_with_context("Category must match [a-z0-9_] and be 2-40 chars", next_query)
+        new_category = re.sub(r"\s+", " ", new_category)
+        if not re.fullmatch(r"[a-z0-9_ ]{2,40}", new_category):
+            return _redirect_index_with_context("Category must match [a-z0-9_ ] and be 2-40 chars", next_query)
 
         raw = _load_raw_config(config_path)
         rules = raw.setdefault("rules", {})
