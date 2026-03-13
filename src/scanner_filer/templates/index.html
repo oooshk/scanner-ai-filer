@@ -33,25 +33,9 @@
     <section class="controls">
       <form method="get" action="/" class="search-form" id="search-form">
         <input type="text" name="q" value="{{ q }}" placeholder="Search filename, sender, category, keywords (example: rob, dkms)">
-        <select name="bucket">
-          <option value="all" {% if bucket == 'all' %}selected{% endif %}>All</option>
-          <option value="archive" {% if bucket == 'archive' %}selected{% endif %}>Archive</option>
-          <option value="review" {% if bucket == 'review' %}selected{% endif %}>Review</option>
-          <option value="rejected" {% if bucket == 'rejected' %}selected{% endif %}>Rejected</option>
-        </select>
-        <select name="sort_by">
-          <option value="received" {% if sort_by == 'received' %}selected{% endif %}>Sort: Time Received</option>
-          <option value="processed" {% if sort_by == 'processed' %}selected{% endif %}>Sort: Last Processed</option>
-          <option value="location" {% if sort_by == 'location' %}selected{% endif %}>Sort: Folder Location</option>
-          <option value="type" {% if sort_by == 'type' %}selected{% endif %}>Sort: Category</option>
-          <option value="sender" {% if sort_by == 'sender' %}selected{% endif %}>Sort: Sender</option>
-          <option value="size" {% if sort_by == 'size' %}selected{% endif %}>Sort: Size</option>
-          <option value="name" {% if sort_by == 'name' %}selected{% endif %}>Sort: Filename</option>
-        </select>
-        <select name="sort_dir">
-          <option value="desc" {% if sort_dir == 'desc' %}selected{% endif %}>Newest / Z-A</option>
-          <option value="asc" {% if sort_dir == 'asc' %}selected{% endif %}>Oldest / A-Z</option>
-        </select>
+        <input type="hidden" name="bucket" id="bucket-hidden" value="{{ bucket }}">
+        <input type="hidden" name="sort_by" id="sort-by-hidden" value="{{ sort_by }}">
+        <input type="hidden" name="sort_dir" id="sort-dir-hidden" value="{{ sort_dir }}">
         <button type="submit">Search</button>
       </form>
     </section>
@@ -406,6 +390,19 @@
             <option value="{{ u }}">{{ u }}</option>
             {% endfor %}
           </select>
+          <select id="docs-sort-by">
+            <option value="received" {% if sort_by == 'received' %}selected{% endif %}>Sort: Time Received</option>
+            <option value="processed" {% if sort_by == 'processed' %}selected{% endif %}>Sort: Last Processed</option>
+            <option value="location" {% if sort_by == 'location' %}selected{% endif %}>Sort: Folder Location</option>
+            <option value="type" {% if sort_by == 'type' %}selected{% endif %}>Sort: Category</option>
+            <option value="sender" {% if sort_by == 'sender' %}selected{% endif %}>Sort: Sender</option>
+            <option value="size" {% if sort_by == 'size' %}selected{% endif %}>Sort: Size</option>
+            <option value="name" {% if sort_by == 'name' %}selected{% endif %}>Sort: Filename</option>
+          </select>
+          <select id="docs-sort-dir">
+            <option value="desc" {% if sort_dir == 'desc' %}selected{% endif %}>Newest / Z-A</option>
+            <option value="asc" {% if sort_dir == 'asc' %}selected{% endif %}>Oldest / A-Z</option>
+          </select>
           <button type="submit" id="bulk-move-submit">Transfer Selected</button>
           <small class="muted" id="bulk-selected-count">0 selected</small>
         </div>
@@ -593,13 +590,24 @@
     refreshQueueOnly();
 
     const searchForm = document.getElementById('search-form');
-    const sortBySelect = searchForm ? searchForm.querySelector('select[name="sort_by"]') : null;
-    const sortDirSelect = searchForm ? searchForm.querySelector('select[name="sort_dir"]') : null;
-    const bucketSelect = searchForm ? searchForm.querySelector('select[name="bucket"]') : null;
-    [sortBySelect, sortDirSelect, bucketSelect].forEach((el) => {
-      if (!el || !searchForm) return;
-      el.addEventListener('change', () => searchForm.submit());
-    });
+    const sortByHidden = document.getElementById('sort-by-hidden');
+    const sortDirHidden = document.getElementById('sort-dir-hidden');
+    const docsSortBy = document.getElementById('docs-sort-by');
+    const docsSortDir = document.getElementById('docs-sort-dir');
+
+    function submitSearchWithSort() {
+      if (!searchForm || !sortByHidden || !sortDirHidden || !docsSortBy || !docsSortDir) return;
+      sortByHidden.value = docsSortBy.value;
+      sortDirHidden.value = docsSortDir.value;
+      searchForm.submit();
+    }
+
+    if (docsSortBy) {
+      docsSortBy.addEventListener('change', submitSearchWithSort);
+    }
+    if (docsSortDir) {
+      docsSortDir.addEventListener('change', submitSearchWithSort);
+    }
 
     function toggleRowById(_event, id) {
       const detail = document.getElementById('detail-' + id);
@@ -733,6 +741,10 @@
       filesCollapseBtn.addEventListener('click', () => {
         documentsTableWrap.hidden = true;
       });
+    }
+
+    if (documentsTableWrap) {
+      documentsTableWrap.hidden = true;
     }
 
     // Ensure document details always start collapsed on page load.
