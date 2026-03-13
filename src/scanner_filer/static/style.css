@@ -22,9 +22,9 @@ body {
 }
 
 .layout {
-  max-width: 1400px;
+  max-width: none;
   margin: 0 auto;
-  padding: 20px;
+  padding: 18px;
 }
 
 .hero h1 {
@@ -220,6 +220,24 @@ button:hover {
   min-width: 220px;
 }
 
+.docs-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px;
+}
+
+.docs-head h2 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.docs-head-actions {
+  display: flex;
+  gap: 8px;
+}
+
 .doc-list-controls {
   display: flex;
   gap: 8px;
@@ -384,14 +402,15 @@ th {
 .doc-detail-row td {
   background: #f7fbff;
   border-bottom: 1px solid #e6e1d3;
+  padding: 14px;
 }
 
 .detail-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(120px, 1fr));
-  gap: 8px;
-  margin-bottom: 8px;
-  font-size: 12px;
+  grid-template-columns: repeat(4, minmax(170px, 1fr));
+  gap: 12px;
+  margin-bottom: 12px;
+  font-size: 14px;
 }
 
 .detail-actions {
@@ -411,23 +430,23 @@ th {
 }
 
 .inline-category-form input {
-  width: 240px;
+  width: 360px;
   height: 32px;
-  font-size: 12px;
+  font-size: 14px;
   padding: 6px 8px;
 }
 
 .inline-category-form button {
   height: 32px;
-  font-size: 12px;
+  font-size: 14px;
   padding: 6px 10px;
 }
 
 .detail-long {
   white-space: normal;
   overflow-wrap: anywhere;
-  font-size: 12px;
-  margin-bottom: 6px;
+  font-size: 14px;
+  margin-bottom: 10px;
   color: #2e3b4f;
 }
 
@@ -440,50 +459,51 @@ th {
 }
 
 .keyword-form input {
-  flex: 1 1 360px;
-  min-width: 220px;
-  height: 32px;
-  font-size: 12px;
-  padding: 6px 8px;
+  flex: 1 1 620px;
+  min-width: 320px;
+  height: 44px;
+  font-size: 14px;
+  padding: 8px 10px;
 }
 
 .keyword-form button {
-  height: 32px;
-  font-size: 12px;
-  padding: 6px 10px;
+  height: 44px;
+  font-size: 14px;
+  padding: 8px 14px;
 }
 
 
 .move-form {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
+  display: grid;
+  grid-template-columns: 140px 180px 96px minmax(220px, 1fr) 120px;
+  gap: 8px;
   align-items: center;
+  width: 100%;
 }
 
 .move-form select,
 .move-form input,
 .move-form button {
-  height: 32px;
-  font-size: 12px;
-  padding: 6px 8px;
+  height: 38px;
+  font-size: 14px;
+  padding: 6px 10px;
 }
 
 .move-form select {
-  min-width: 92px;
-  max-width: 130px;
+  min-width: 120px;
+  max-width: none;
 }
 
 .move-form input[name="target_year"] {
-  width: 64px;
+  width: auto;
 }
 
 .move-form input[name="target_sender"] {
-  width: 110px;
+  width: auto;
 }
 
 .move-form button {
-  min-width: 64px;
+  min-width: 96px;
 }
 
 
@@ -508,16 +528,16 @@ th {
 }
 
 .split-manual-form input {
-  width: 86px;
+  width: 120px;
   height: 30px;
-  font-size: 12px;
+  font-size: 14px;
   padding: 5px 7px;
 }
 
 .split-manual-form button {
-  height: 30px;
-  font-size: 12px;
-  padding: 5px 8px;
+  height: 34px;
+  font-size: 14px;
+  padding: 6px 10px;
 }
 
 .delete-form {
@@ -559,6 +579,9 @@ th {
 @media (max-width: 900px) {
   .search-form {
     grid-template-columns: 1fr;
+  }
+  .move-form {
+    grid-template-columns: 1fr 1fr;
   }
   .detail-grid {
     grid-template-columns: 1fr 1fr;

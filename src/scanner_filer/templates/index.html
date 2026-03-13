@@ -386,10 +386,17 @@
       {% endif %}
     </section>
 
-    <section class="table-wrap">
+    <section class="table-wrap" id="documents-section">
       <form method="post" action="/move-inbox-bulk" class="bulk-move-form" id="bulk-move-form">
         <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
         <input type="hidden" name="next" value="{{ return_query }}">
+        <div class="docs-head">
+          <h2>Documents</h2>
+          <div class="docs-head-actions">
+            <button type="button" id="files-expand" class="tree-toggle-btn">Expand File List</button>
+            <button type="button" id="files-collapse" class="tree-toggle-btn">Collapse File List</button>
+          </div>
+        </div>
         <div class="bulk-move-controls">
           <label class="checkline"><input type="checkbox" id="select-all-docs"> Select all visible</label>
           <select name="target_user" id="bulk-target-user">
@@ -403,10 +410,11 @@
           <small class="muted" id="bulk-selected-count">0 selected</small>
         </div>
         <div class="doc-list-controls">
-          <button type="button" id="docs-expand-all" class="tree-toggle-btn">Expand All Docs</button>
-          <button type="button" id="docs-collapse-all" class="tree-toggle-btn">Collapse All Docs</button>
+          <button type="button" id="docs-expand-all" class="tree-toggle-btn">Expand All Details</button>
+          <button type="button" id="docs-collapse-all" class="tree-toggle-btn">Collapse All Details</button>
         </div>
 
+      <div id="documents-table-wrap">
       <table>
         <thead>
           <tr>
@@ -446,7 +454,7 @@
                 <div><strong>Sender:</strong> {{ d.sender or 'unknown' }}</div>
                 <div><strong>Year:</strong> {{ d.year or '-' }}</div>
                 <div><strong>Size:</strong> {{ (d.size_bytes / 1024)|round(1) }} KB</div>
-                <div><strong>Suggested:</strong> {{ d.suggested_type or '-' }}</div>
+                <div><strong>Suggested:</strong> {% if d.suggested_type %}{{ d.suggested_type }}{% elif d.doc_type and d.doc_type != 'unknown' %}already {{ d.doc_type }}{% else %}-{% endif %}</div>
               </div>
               <div class="detail-long"><strong>Full path:</strong> {{ d.rel_path }}</div>
               <div class="detail-long"><strong>Keywords:</strong> {{ d.keywords|join(', ') if d.keywords else '-' }}</div>
@@ -512,6 +520,7 @@
           {% endfor %}
         </tbody>
       </table>
+      </div>
       </form>
     </section>
   </main>
@@ -618,6 +627,9 @@
     const bulkTargetUser = document.getElementById('bulk-target-user');
     const docsExpandAllBtn = document.getElementById('docs-expand-all');
     const docsCollapseAllBtn = document.getElementById('docs-collapse-all');
+    const filesExpandBtn = document.getElementById('files-expand');
+    const filesCollapseBtn = document.getElementById('files-collapse');
+    const documentsTableWrap = document.getElementById('documents-table-wrap');
 
     function selectedDocCheckboxes() {
       return Array.from(document.querySelectorAll('.doc-select'));
@@ -709,6 +721,18 @@
     }
     if (docsCollapseAllBtn) {
       docsCollapseAllBtn.addEventListener('click', () => setAllDocRows(false));
+    }
+
+    if (filesExpandBtn && documentsTableWrap) {
+      filesExpandBtn.addEventListener('click', () => {
+        documentsTableWrap.hidden = false;
+      });
+    }
+
+    if (filesCollapseBtn && documentsTableWrap) {
+      filesCollapseBtn.addEventListener('click', () => {
+        documentsTableWrap.hidden = true;
+      });
     }
 
     // Ensure document details always start collapsed on page load.
