@@ -92,8 +92,9 @@
               <li><span style="background:#d2f5ea;color:#0e5b4f;padding:2px 7px;border-radius:9px;font-size:12px;font-weight:600;">archive</span> — filed and complete.</li>
               <li><span style="background:#e03131;color:#fff;padding:2px 7px;border-radius:9px;font-size:12px;font-weight:700;">review</span> — needs your attention. Classification was uncertain or unknown.</li>
               <li><span style="background:#ffd9d6;color:#9f1d1d;padding:2px 7px;border-radius:9px;font-size:12px;font-weight:600;">rejected</span> — processing failed.</li>
+              <li><span style="background:linear-gradient(90deg,#b42318,#198754);color:#fff;padding:2px 7px;border-radius:9px;font-size:12px;font-weight:700;">0.0-1.0</span> — AI confidence chip shown next to the status chip. 1.0 is strongest confidence (green), 0.0 is weakest (red), with a red-to-green gradient in between.</li>
               <li><span style="background:#dbeafe;color:#1e3a8a;padding:2px 7px;border-radius:9px;font-size:12px;font-weight:600;">username</span> — document belongs to a specific user inbox.</li>
-              <li><span style="background:#f59f00;color:#111;padding:2px 7px;border-radius:9px;font-size:12px;font-weight:600;">auto-filed</span> — was archived automatically by the pipeline in the last 7 days.</li>
+              <li><span style="background:#f59f00;color:#111;padding:2px 7px;border-radius:9px;font-size:12px;font-weight:600;">auto-filed</span> — was archived automatically by the pipeline within your configured highlight window (10m, 1h, 1d, 1w, or forever).</li>
             </ul>
             <h4>Expanding a Row</h4>
             <p>Click any row to expand its detail panel. Click again to collapse.</p>
@@ -160,6 +161,9 @@
             <p><strong>Recommended:</strong> start with Suggest only, review behavior for a few days, then enable auto-create if suggestions are consistently accurate.</p>
             <h4>Confidence Threshold</h4>
             <p>Set in Setup → AI Filing Behaviour. Documents with a confidence score below this value go to Review instead of Archive.</p>
+            <h4>LLM Output Reliability</h4>
+            <p>The classifier enforces strict JSON shape and confidence bounds before a result is accepted. Invalid or malformed model output is rejected and handled by the fallback path rather than being trusted blindly.</p>
+            <p>In Setup → Runtime &amp; Engine, the JSON reliability card shows current health (failure rate, consecutive failures, fallback triggers, and active mode).</p>
             <h4>Public Acronym Options (Important Difference)</h4>
             <ul>
               <li><strong>Enable public acronym knowledge assist</strong> — turns on acronym detection and local acronym mapping only. No internet required. Safe default if you want privacy-first behaviour.</li>
@@ -215,6 +219,8 @@
               <li><strong>inbox_settle_seconds</strong> — minimum file age before processing starts.</li>
               <li><strong>require_size_stability / stable_cycles_required</strong> — prevents processing files that are still growing on disk.</li>
               <li><strong>LLM timeout / max input chars</strong> — controls model latency and prompt size.</li>
+              <li><strong>LLM profile</strong> — Fast, Balanced, Deep, Ultra, or Custom. Non-custom profiles auto-build a command for an available local model and keep structured JSON output constraints enabled.</li>
+              <li><strong>LLM JSON reliability panel</strong> — live view of JSON failure rate, consecutive failures, fallback activity, and last result mode to quickly detect model-output drift.</li>
               <li><strong>LLM/OCR enabled</strong> — hard on/off switches for classification and OCR engines.</li>
               <li><strong>log level</strong> — DEBUG/INFO/WARNING/ERROR runtime verbosity.</li>
             </ul>
@@ -534,18 +540,51 @@
         <details class="setup-block">
           <summary>Runtime &amp; Engine</summary>
           <p class="muted">Tune watcher timing, stability checks, and model runtime controls.</p>
+          <div class="llm-health-card" id="llm-json-health" data-metrics-available="{{ 1 if setup_defaults.llm_json_metrics_available else 0 }}">
+            <div class="llm-health-head">
+              <strong>LLM JSON Reliability</strong>
+              <span class="muted" id="llm-json-mode">mode: {{ setup_defaults.llm_json_last_mode }}</span>
+            </div>
+            <div class="llm-health-grid">
+              <span>Failure rate:</span><strong id="llm-json-failure-rate">{{ setup_defaults.llm_json_failure_rate_pct }}%</strong>
+              <span>Consecutive failures:</span><strong id="llm-json-consecutive">{{ setup_defaults.llm_json_consecutive_failures }}</strong>
+              <span>Total classify calls:</span><strong id="llm-json-total">{{ setup_defaults.llm_json_total_calls }}</strong>
+              <span>Fallback triggers:</span><strong id="llm-json-triggers">{{ setup_defaults.llm_json_fallback_triggers }}</strong>
+              <span>Fallback active until call:</span><strong id="llm-json-until">{{ setup_defaults.llm_json_fallback_until_call }}</strong>
+              <span>Last result:</span><strong id="llm-json-last">{{ setup_defaults.llm_json_last_result or 'n/a' }}</strong>
+            </div>
+            <div class="muted" id="llm-json-window">Window size: {{ setup_defaults.llm_json_recent_window }}</div>
+            {% if not setup_defaults.llm_json_metrics_available %}
+            <div class="muted">Metrics file not created yet. It appears after classification calls run.</div>
+            {% endif %}
+          </div>
           <form method="post" action="/setup/runtime" class="setup-form">
             <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
             <input type="hidden" name="next" value="{{ return_query }}">
             <input type="number" min="1" max="60" step="1" name="poll_seconds" value="{{ setup_defaults.poll_seconds }}" placeholder="Watcher poll interval (seconds)">
             <input type="number" min="0" max="600" step="1" name="inbox_settle_seconds" value="{{ setup_defaults.inbox_settle_seconds }}" placeholder="Inbox settle delay (seconds)">
+            <select name="auto_file_highlight_window">
+              <option value="10m" {% if setup_defaults.auto_file_highlight_window == '10m' %}selected{% endif %}>Auto-file highlight: 10 minutes</option>
+              <option value="1h" {% if setup_defaults.auto_file_highlight_window == '1h' %}selected{% endif %}>Auto-file highlight: 1 hour</option>
+              <option value="1d" {% if setup_defaults.auto_file_highlight_window == '1d' %}selected{% endif %}>Auto-file highlight: 1 day</option>
+              <option value="1w" {% if setup_defaults.auto_file_highlight_window == '1w' %}selected{% endif %}>Auto-file highlight: 1 week</option>
+              <option value="forever" {% if setup_defaults.auto_file_highlight_window == 'forever' %}selected{% endif %}>Auto-file highlight: indefinitely</option>
+            </select>
             <label class="checkline"><input type="checkbox" name="require_size_stability" {% if setup_defaults.require_size_stability %}checked{% endif %}> Require file size stability before processing</label>
             <input type="number" min="1" max="10" step="1" name="stable_cycles_required" value="{{ setup_defaults.stable_cycles_required }}" placeholder="Stable cycles required">
             <label class="checkline"><input type="checkbox" name="ocr_enabled" {% if setup_defaults.ocr_enabled %}checked{% endif %}> Enable OCR engine</label>
             <label class="checkline"><input type="checkbox" name="llm_enabled" {% if setup_defaults.llm_enabled %}checked{% endif %}> Enable LLM classifier</label>
             <input type="number" min="30" max="1200" step="5" name="llm_timeout_seconds" value="{{ setup_defaults.llm_timeout_seconds }}" placeholder="LLM timeout (seconds)">
             <input type="number" min="600" max="20000" step="100" name="llm_max_input_chars" value="{{ setup_defaults.llm_max_input_chars }}" placeholder="LLM max input chars">
+            <select name="llm_profile">
+              <option value="fast" {% if setup_defaults.llm_profile == 'fast' %}selected{% endif %}>LLM Profile: Fast (small model, quickest)</option>
+              <option value="balanced" {% if setup_defaults.llm_profile == 'balanced' %}selected{% endif %}>LLM Profile: Balanced (medium model)</option>
+              <option value="deep" {% if setup_defaults.llm_profile == 'deep' %}selected{% endif %}>LLM Profile: Deep (larger model, slowest/smartest)</option>
+              <option value="ultra" {% if setup_defaults.llm_profile == 'ultra' %}selected{% endif %}>LLM Profile: Ultra (16B-class instruct, scenario-tuned)</option>
+              <option value="custom" {% if setup_defaults.llm_profile == 'custom' %}selected{% endif %}>LLM Profile: Custom command</option>
+            </select>
             <textarea name="llm_command_template" rows="3" placeholder="LLM command template">{{ setup_defaults.llm_command_template }}</textarea>
+            <div class="field-hint" style="grid-column: 1 / -1; white-space: normal; min-height: 0;">Current model hint: {{ setup_defaults.llm_model_hint or 'not detected' }}. Choose Fast/Balanced/Deep to auto-generate a command, or Custom to use your own command template.</div>
             <select name="log_level">
               <option value="DEBUG" {% if setup_defaults.log_level == 'DEBUG' %}selected{% endif %}>Log level: DEBUG</option>
               <option value="INFO" {% if setup_defaults.log_level == 'INFO' %}selected{% endif %}>Log level: INFO</option>
@@ -612,11 +651,16 @@
     <section class="queue-wrap">
       <div class="queue-head">
         <h2>Pending / Processing</h2>
+        <div class="queue-head-actions">
+          <button type="button" id="queue-mode-toggle" class="tree-toggle-btn" aria-pressed="true">Show Full Queue</button>
+          <small class="muted" id="queue-count"></small>
+        </div>
         <form method="post" action="/purge-processing" class="purge-form" onsubmit="return confirm('Move all stuck/orphaned files back to inbox for reprocessing?')">
           <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
           <button type="submit" class="btn-rescue" title="Rescue files stuck in the processing folder back to inbox">&#9851; Rescue Stuck Files</button>
         </form>
       </div>
+      <div class="queue-summary muted" id="queue-summary" aria-live="polite"></div>
       <table class="queue-table" id="queue-table" {% if not queue_rows %}hidden{% endif %}>
         <thead>
           <tr>
@@ -694,11 +738,14 @@
           <div class="docs-head-actions">
             <button type="button" id="files-expand" class="tree-toggle-btn">Expand File List</button>
             <button type="button" id="files-collapse" class="tree-toggle-btn">Collapse File List</button>
+            <button type="button" id="docs-expand-all" class="tree-toggle-btn">Expand All Details</button>
+            <button type="button" id="docs-collapse-all" class="tree-toggle-btn">Collapse All Details</button>
           </div>
         </div>
         <div class="bulk-move-controls">
           <div class="bulk-controls-left">
             <label class="checkline"><input type="checkbox" id="select-all-docs"> Select all visible</label>
+            <button type="button" id="select-review-docs" class="tree-toggle-btn">Select Review Only</button>
             <select name="target_user" id="bulk-target-user" form="bulk-move-form">
               <option value="">Move selected to user inbox...</option>
               <option value="generic">Generic inbox</option>
@@ -727,11 +774,6 @@
             </select>
           </div>
         </div>
-        <div class="doc-list-controls">
-          <button type="button" id="docs-expand-all" class="tree-toggle-btn">Expand All Details</button>
-          <button type="button" id="docs-collapse-all" class="tree-toggle-btn">Collapse All Details</button>
-        </div>
-
       <div id="documents-table-wrap">
       <table>
         <thead>
@@ -751,8 +793,11 @@
             <td>
               <input type="checkbox" class="doc-select" data-inbox-user="{{ d.inbox_user }}" name="selected" value="{{ d.bucket }}|{{ d.rel_path }}" form="bulk-move-form">
             </td>
-            <td>
+            <td class="doc-status-cell">
               <span class="chip chip-{{ d.bucket }}">{{ d.bucket }}</span>
+              {% if d.ai_decision_confidence is not none %}
+              <span class="chip chip-confidence" style="--confidence: {{ '%.3f'|format(d.ai_decision_confidence) }};" title="AI confidence {{ '%.1f'|format(d.ai_decision_confidence) }}">{{ '%.1f'|format(d.ai_decision_confidence) }}</span>
+              {% endif %}
               {% if d.inbox_user %}
               <span class="chip chip-inbox" title="Currently in {{ d.inbox_user }} inbox">{{ d.inbox_user }}</span>
               {% endif %}
@@ -760,8 +805,12 @@
               <span class="chip chip-autofile" title="Auto-filed at {{ d.auto_filed_iso }}">auto-filed</span>
               {% endif %}
             </td>
-            <td class="doc-filename-cell"><span class="doc-name">{{ d.filename }}</span> <a class="doc-open-link" href="{{ url_for('open_document', bucket=d.bucket, rel_path=d.rel_path) }}" target="_blank" rel="noopener" title="Open {{ d.rel_path }}">&#128196; Open</a></td>
-            <td>{{ d.doc_type }}</td>
+            <td class="doc-filename-cell"><span class="doc-name">{{ d.filename }}</span> <a class="doc-open-link" href="{{ url_for('open_document', bucket=d.bucket, rel_path=d.rel_path) }}" target="_blank" rel="noopener" title="Open {{ d.rel_path }}">Open</a></td>
+            <td>
+              <div class="doc-type-cell">
+                <span>{{ d.doc_type }}</span>
+              </div>
+            </td>
             <td>{{ d.scanned_iso }}</td>
             <td>{{ d.modified_iso }}</td>
             <td class="path" title="{{ d.rel_path }}">{{ d.rel_path }}</td>
@@ -774,6 +823,9 @@
                 <div><strong>Size:</strong> {{ (d.size_bytes / 1024)|round(1) }} KB</div>
                 <div><strong>Suggested:</strong> {% if d.suggested_type %}{{ d.suggested_type }}{% elif d.doc_type and d.doc_type != 'unknown' %}already {{ d.doc_type }}{% else %}-{% endif %}</div>
               </div>
+              {% if d.ai_suggested_type %}
+              <div class="detail-ai-suggestion">AI suggests <strong>{{ d.ai_suggested_type }}</strong>{% if d.ai_suggested_confidence > 0 %} ({{ (d.ai_suggested_confidence * 100)|round(0)|int }}% confidence){% endif %}</div>
+              {% endif %}
               <div class="detail-long"><strong>Full path:</strong> {{ d.rel_path }}</div>
               <div class="detail-long"><strong>Keywords:</strong> {{ d.keywords|join(', ') if d.keywords else '-' }}</div>
 
@@ -859,6 +911,16 @@
     let autoRefreshTimer = null;
     let queueWasActive = false;
     const docsUiStateKey = 'docs_ui_state_v1';
+    const queueUiStateKey = 'queue_ui_state_v1';
+    const queueDefaultCompactRows = 3;
+    let queueMode = 'compact';
+    let queueStats = {
+      baselineTotal: 0,
+      processed: 0,
+      lastRemaining: null,
+      lastTs: 0,
+      ratePerMinute: 0,
+    };
 
     function loadDocsUiState() {
       try {
@@ -918,8 +980,151 @@
       </tr>`;
     }
 
+    function formatEtaFromMinutes(minutes) {
+      if (!Number.isFinite(minutes) || minutes <= 0) return 'estimating...';
+      const etaMs = Date.now() + (minutes * 60 * 1000);
+      const eta = new Date(etaMs);
+      return `around ${eta.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+    }
+
+    function loadQueueUiState() {
+      try {
+        const raw = sessionStorage.getItem(queueUiStateKey);
+        if (!raw) return;
+        const parsed = JSON.parse(raw);
+        if (parsed && parsed.mode === 'full') {
+          queueMode = 'full';
+        }
+        if (parsed && parsed.stats && typeof parsed.stats === 'object') {
+          queueStats = {
+            baselineTotal: Number(parsed.stats.baselineTotal) || 0,
+            processed: Number(parsed.stats.processed) || 0,
+            lastRemaining: parsed.stats.lastRemaining == null ? null : Number(parsed.stats.lastRemaining),
+            lastTs: Number(parsed.stats.lastTs) || 0,
+            ratePerMinute: Number(parsed.stats.ratePerMinute) || 0,
+          };
+        }
+      } catch (_err) {
+      }
+    }
+
+    function saveQueueUiState() {
+      try {
+        sessionStorage.setItem(queueUiStateKey, JSON.stringify({
+          mode: queueMode,
+          stats: queueStats,
+        }));
+      } catch (_err) {
+      }
+    }
+
+    function updateQueueToggleUi(totalRows) {
+      const toggle = document.getElementById('queue-mode-toggle');
+      const count = document.getElementById('queue-count');
+      if (toggle) {
+        const isCompact = queueMode === 'compact';
+        toggle.setAttribute('aria-pressed', isCompact ? 'true' : 'false');
+        toggle.textContent = isCompact ? 'Show Full Queue' : 'Show Compact Queue';
+      }
+      if (count) {
+        if (!totalRows) {
+          count.textContent = '';
+        } else if (queueMode === 'compact' && totalRows > queueDefaultCompactRows) {
+          count.textContent = `Showing ${queueDefaultCompactRows} of ${totalRows}`;
+        } else {
+          count.textContent = `${totalRows} item${totalRows === 1 ? '' : 's'}`;
+        }
+      }
+    }
+
+    function renderQueueRows(rows) {
+      const body = document.getElementById('queue-body');
+      if (!body) return;
+      const visibleRows = (queueMode === 'compact') ? rows.slice(0, queueDefaultCompactRows) : rows;
+      body.innerHTML = visibleRows.map(queueRowHtml).join('');
+      updateQueueToggleUi(rows.length);
+    }
+
+    function updateQueueSummary(rows) {
+      const summary = document.getElementById('queue-summary');
+      if (!summary) return;
+
+      const remaining = rows.length;
+      const now = Date.now();
+      if (remaining > queueStats.baselineTotal) {
+        queueStats.baselineTotal = remaining;
+      }
+
+      if (queueStats.lastRemaining !== null && remaining < queueStats.lastRemaining) {
+        const completed = queueStats.lastRemaining - remaining;
+        queueStats.processed += completed;
+        const elapsedMinutes = Math.max(0.05, (now - queueStats.lastTs) / 60000);
+        const instRate = completed / elapsedMinutes;
+        if (instRate > 0) {
+          queueStats.ratePerMinute = queueStats.ratePerMinute > 0
+            ? (queueStats.ratePerMinute * 0.7) + (instRate * 0.3)
+            : instRate;
+        }
+      }
+
+      const total = Math.max(queueStats.baselineTotal, queueStats.processed + remaining);
+      const processed = Math.max(0, total - remaining);
+      const etaText = remaining > 0 && queueStats.ratePerMinute > 0
+        ? formatEtaFromMinutes(remaining / queueStats.ratePerMinute)
+        : 'estimating...';
+
+      if (remaining === 0) {
+        summary.textContent = total > 0
+          ? `${total}/${total} processed. Queue is clear.`
+          : 'Queue is clear.';
+      } else {
+        summary.textContent = `${processed}/${total} processed, ${remaining} remaining, ETA ${etaText}`;
+      }
+
+      queueStats.lastRemaining = remaining;
+      queueStats.lastTs = now;
+      saveQueueUiState();
+    }
+
     function escapeHtml(s) {
       return String(s || '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&#39;');
+    }
+
+    function renderLlmJsonHealth(data) {
+      const card = document.getElementById('llm-json-health');
+      if (!card || !data || typeof data !== 'object') return;
+
+      const failureRate = Number(data.failure_rate_pct || 0);
+      const mode = String(data.last_mode || 'primary');
+      const hasMetrics = !!data.available;
+      card.dataset.metricsAvailable = hasMetrics ? '1' : '0';
+      card.classList.toggle('llm-health-alert', hasMetrics && failureRate >= 35);
+
+      const setText = (id, value) => {
+        const el = document.getElementById(id);
+        if (el) el.textContent = String(value);
+      };
+
+      setText('llm-json-mode', `mode: ${mode}`);
+      setText('llm-json-failure-rate', `${failureRate.toFixed(1)}%`);
+      setText('llm-json-consecutive', Number(data.consecutive_json_failures || 0));
+      setText('llm-json-total', Number(data.total_calls || 0));
+      setText('llm-json-triggers', Number(data.fallback_triggers || 0));
+      setText('llm-json-until', Number(data.fallback_active_until_call || 0));
+      setText('llm-json-last', String(data.last_result || 'n/a'));
+      setText('llm-json-window', `Window size: ${Number(data.recent_window_size || 0)}`);
+    }
+
+    async function refreshLlmJsonHealthOnly() {
+      const card = document.getElementById('llm-json-health');
+      if (!card) return;
+      try {
+        const resp = await fetch('/api/llm-json-health', { cache: 'no-store' });
+        if (!resp.ok) return;
+        const data = await resp.json();
+        renderLlmJsonHealth(data);
+      } catch (_err) {
+      }
     }
 
     async function refreshQueueOnly() {
@@ -936,6 +1141,8 @@
           body.innerHTML = '';
           table.hidden = true;
           empty.hidden = false;
+          updateQueueToggleUi(0);
+          updateQueueSummary(rows);
           if (queueWasActive && !userIsEditing()) {
             queueWasActive = false;
             window.location.reload();
@@ -944,7 +1151,8 @@
           return;
         }
         queueWasActive = true;
-        body.innerHTML = rows.map(queueRowHtml).join('');
+        renderQueueRows(rows);
+        updateQueueSummary(rows);
         table.hidden = false;
         empty.hidden = true;
       } catch (_err) {
@@ -961,11 +1169,24 @@
           return;
         }
         refreshQueueOnly();
+        refreshLlmJsonHealthOnly();
       }, 5000);
+    }
+
+    loadQueueUiState();
+
+    const queueModeToggle = document.getElementById('queue-mode-toggle');
+    if (queueModeToggle) {
+      queueModeToggle.addEventListener('click', () => {
+        queueMode = queueMode === 'compact' ? 'full' : 'compact';
+        refreshQueueOnly();
+        saveQueueUiState();
+      });
     }
 
     scheduleAutoRefresh();
     refreshQueueOnly();
+    refreshLlmJsonHealthOnly();
 
     const searchForm = document.getElementById('search-form');
     const sortByHidden = document.getElementById('sort-by-hidden');
@@ -1016,6 +1237,7 @@
     });
 
     const selectAllDocs = document.getElementById('select-all-docs');
+    const selectReviewDocs = document.getElementById('select-review-docs');
     const bulkSelectedCount = document.getElementById('bulk-selected-count');
     const bulkMoveForm = document.getElementById('bulk-move-form');
     const bulkTargetUser = document.getElementById('bulk-target-user');
@@ -1043,6 +1265,11 @@
         return owner !== '';
       }
       return owner.toLowerCase() !== target.toLowerCase();
+    }
+
+    function isReviewDoc(cb) {
+      const value = String(cb.value || '');
+      return value.startsWith('review|');
     }
 
     function updateSelectedCount() {
@@ -1082,6 +1309,18 @@
         selectedDocCheckboxes().forEach((cb) => {
           cb.checked = shouldSelectForTarget(cb, target);
         });
+        updateSelectedCount();
+      });
+    }
+
+    if (selectReviewDocs) {
+      selectReviewDocs.addEventListener('click', () => {
+        selectedDocCheckboxes().forEach((cb) => {
+          cb.checked = isReviewDoc(cb);
+        });
+        if (selectAllDocs) {
+          selectAllDocs.checked = false;
+        }
         updateSelectedCount();
       });
     }

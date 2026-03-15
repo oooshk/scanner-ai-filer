@@ -227,6 +227,35 @@ body {
   justify-self: start;
 }
 
+.llm-health-card {
+  margin-top: 8px;
+  border: 1px solid #d7e6e1;
+  border-radius: 8px;
+  background: #f6fbff;
+  padding: 10px;
+}
+
+.llm-health-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.llm-health-grid {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 4px 12px;
+  font-size: 13px;
+  margin-bottom: 6px;
+}
+
+.llm-health-alert {
+  border-color: #f0b429;
+  background: #fff8e8;
+}
+
 .setup-form-compact {
   grid-template-columns: 1fr auto;
   align-items: center;
@@ -272,6 +301,54 @@ button {
 
 button:hover {
   filter: brightness(0.93);
+}
+
+button:disabled {
+  opacity: 0.75;
+  cursor: wait;
+  filter: none;
+}
+
+.login-submit-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-width: 112px;
+}
+
+.btn-spinner {
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.45);
+  border-top-color: #ffffff;
+  display: none;
+  animation: spinner-rotate 0.8s linear infinite;
+}
+
+.login-submit-btn.is-loading .btn-spinner {
+  display: inline-block;
+}
+
+.login-submit-btn.is-loading .btn-label {
+  font-size: 0;
+}
+
+.login-submit-btn.is-loading .btn-label::after {
+  content: "Signing in...";
+  font-size: 14px;
+}
+
+.login-status {
+  margin: 8px 0 0;
+  min-height: 18px;
+}
+
+@keyframes spinner-rotate {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .table-wrap {
@@ -327,13 +404,9 @@ button:hover {
 
 .docs-head-actions {
   display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   gap: 8px;
-}
-
-.doc-list-controls {
-  display: flex;
-  gap: 8px;
-  padding: 0 10px 10px;
 }
 
 .queue-wrap {
@@ -418,27 +491,65 @@ button:hover {
 .doc-filename-cell {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 6px;
   font-family: "IBM Plex Mono", monospace;
   font-size: 12px;
-  max-width: 320px;
+  width: 100%;
+  min-width: 0;
 }
 
 .doc-name {
+  display: block;
   color: #2e3b4f;
   flex: 1 1 auto;
   min-width: 0;
+  line-height: 1.25;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.doc-type-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.confidence-badge {
+  --confidence: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  background: hsl(calc(var(--confidence) * 120), 70%, 42%);
+  color: #fff;
+  font-weight: 700;
+  font-size: 11px;
+  letter-spacing: 0.2px;
+}
+
+.confidence-badge-empty {
+  background: #d1d7e3;
+  color: #2c3342;
+  font-weight: 600;
 }
 
 .doc-open-link {
   font-size: 12px;
   color: #114b95;
   text-decoration: none;
-  flex: 0 0 auto;
   white-space: nowrap;
+}
+
+.doc-filename-cell .doc-open-link {
+  display: inline-flex;
+  align-items: center;
+  line-height: 1.25;
 }
 
 .doc-open-link:hover {
@@ -471,8 +582,10 @@ button:hover {
 .queue-head {
   display: flex;
   align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
   gap: 12px;
-  margin-bottom: 10px;
+  margin-bottom: 6px;
 }
 
 .queue-head h2 {
@@ -483,6 +596,17 @@ button:hover {
 .queue-wrap h2 {
   margin: 2px 0 10px;
   font-size: 18px;
+}
+
+.queue-head-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.queue-summary {
+  margin: 2px 0 10px;
+  font-size: 13px;
 }
 
 .btn-rescue {
@@ -535,6 +659,17 @@ th, td {
   vertical-align: top;
   font-size: 13px;
   overflow-wrap: anywhere;
+}
+
+#documents-table-wrap th:first-child,
+#documents-table-wrap td:first-child {
+  width: 42px;
+  padding-right: 4px;
+}
+
+#documents-table-wrap th:nth-child(2),
+#documents-table-wrap td:nth-child(2) {
+  padding-left: 4px;
 }
 
 th {
@@ -596,6 +731,17 @@ th {
   gap: 12px;
   margin-bottom: 12px;
   font-size: 14px;
+}
+
+.detail-ai-suggestion {
+  display: inline-block;
+  margin: 0 0 10px;
+  padding: 5px 9px;
+  border-radius: 999px;
+  border: 1px solid #f0c36d;
+  background: #fff8e8;
+  color: #7a4f00;
+  font-size: 13px;
 }
 
 .detail-actions {
@@ -774,16 +920,33 @@ th {
   font-weight: 600;
 }
 
+.doc-status-cell {
+  white-space: nowrap;
+}
+
+.doc-status-cell .chip + .chip {
+  margin-left: 4px;
+}
+
 .chip-autofile {
   background: #f59f00;
   color: #111;
-  margin-left: 6px;
+  margin-left: 4px;
+}
+
+.chip-confidence {
+  --confidence: 0;
+  background: hsl(calc(var(--confidence) * 120), 70%, 42%);
+  color: #fff;
+  font-weight: 700;
+  min-width: 42px;
+  text-align: center;
 }
 
 .chip-inbox {
   background: #dbeafe;
   color: #1e3a8a;
-  margin-left: 6px;
+  margin-left: 4px;
 }
 
 .chip-archive { background: #d2f5ea; color: #0e5b4f; }

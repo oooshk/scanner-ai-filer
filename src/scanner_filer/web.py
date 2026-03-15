@@ -49,6 +49,9 @@ class DocumentRecord:
     inbox_user: str
     auto_filed_recent: bool
     auto_filed_iso: str
+    ai_decision_confidence: float | None
+    ai_suggested_type: str
+    ai_suggested_confidence: float
 
 
 @dataclass
@@ -117,6 +120,211 @@ CATEGORY_HINTS: dict[str, list[str]] = {
     "legal": ["agreement", "contract", "terms", "legal"],
     "personal": ["letter", "correspondence", "personal"],
 }
+
+LLM_PROFILE_CHOICES = {"fast", "balanced", "deep", "ultra", "custom"}
+AUTO_FILE_HIGHLIGHT_WINDOWS: dict[str, int | None] = {
+    "10m": 10 * 60,
+    "1h": 60 * 60,
+    "1d": 24 * 60 * 60,
+    "1w": 7 * 24 * 60 * 60,
+    "forever": None,
+}
+
+
+def _extract_llama_binary(command_template: str) -> str:
+    m = re.search(r"^\s*([^\s]*llama-completion)\b", str(command_template or "").strip())
+    if m:
+        return m.group(1)
+    return "/home/pi/llama.cpp/build/bin/llama-completion"
+
+
+def _extract_model_path_from_command(command_template: str) -> str:
+    m = re.search(r"(?:^|\s)-m\s+(\S+)", str(command_template or ""))
+    return m.group(1).strip() if m else ""
+
+
+def _pick_first_existing_model(candidates: list[str], fallback: str) -> str:
+    for candidate in candidates:
+        p = Path(str(candidate)).expanduser()
+        if p.exists() and p.is_file():
+            return str(p)
+    return fallback or str(Path(candidates[0]).expanduser())
+
+
+def _llm_json_schema(allowed_doc_types: list[str] | None = None) -> str:
+    allowed = [str(t).strip().lower() for t in (allowed_doc_types or []) if str(t).strip()]
+    # Preserve stable enum ordering and avoid duplicates.
+    allowed_unique = list(dict.fromkeys(allowed))
+    if not allowed_unique:
+        allowed_unique = ["unknown"]
+
+    schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["doc_type", "vendor_or_sender", "date", "tags", "confidence", "reason"],
+        "properties": {
+            "doc_type": {"type": "string", "enum": allowed_unique},
+            "vendor_or_sender": {"type": "string", "minLength": 1, "maxLength": 80},
+            "date": {"type": "string", "pattern": r"^(|\\d{4}-\\d{2}-\\d{2})$"},
+            "tags": {"type": "array", "maxItems": 4, "items": {"type": "string", "maxLength": 24}},
+            "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+            "reason": {"type": "string", "minLength": 1, "maxLength": 160},
+            "suggested_doc_type": {"type": "string", "pattern": r"^[a-z0-9_]{0,40}$"},
+            "suggested_doc_type_confidence": {"type": "number", "minimum": 0, "maximum": 1},
+        },
+    }
+    return json.dumps(schema, ensure_ascii=True, separators=(",", ":"))
+
+
+def _build_llm_profile_command(profile: str, current_command: str, allowed_doc_types: list[str] | None = None) -> str:
+    selected = str(profile or "custom").strip().lower()
+    if selected not in LLM_PROFILE_CHOICES or selected == "custom":
+        return current_command
+
+    current = str(current_command or "").strip()
+    if current.startswith("ollama run"):
+        ollama_model = {
+            "fast": "qwen2.5:1.5b",
+            "balanced": "qwen2.5:3b",
+            "deep": "qwen2.5:7b",
+            "ultra": "qwen2.5:14b",
+        }.get(selected, "qwen2.5:3b")
+        return f"ollama run {ollama_model}"
+
+    binary = _extract_llama_binary(current)
+    current_model = _extract_model_path_from_command(current)
+    model_candidates = {
+        "fast": [
+            "/home/pi/models/Qwen2.5-1.5B-Instruct-Q4_K_M.gguf",
+            "/opt/models/Qwen2.5-1.5B-Instruct-Q4_K_M.gguf",
+        ],
+        "balanced": [
+            "/home/pi/models/Qwen2.5-3B-Instruct-Q4_K_M.gguf",
+            "/home/pi/models/Qwen2.5-4B-Instruct-Q4_K_M.gguf",
+            "/opt/models/Qwen2.5-3B-Instruct-Q4_K_M.gguf",
+            "/home/pi/models/Qwen2.5-1.5B-Instruct-Q4_K_M.gguf",
+        ],
+        "deep": [
+            "/home/pi/models/Qwen2.5-7B-Instruct-Q4_K_M.gguf",
+            "/home/pi/models/Qwen2.5-14B-Instruct-Q4_K_M.gguf",
+            "/opt/models/Qwen2.5-7B-Instruct-Q4_K_M.gguf",
+            "/home/pi/models/Qwen2.5-3B-Instruct-Q4_K_M.gguf",
+        ],
+        "ultra": [
+            "/home/pi/models/Qwen2.5-16B-Instruct-Q4_K_M.gguf",
+            "/home/pi/models/Qwen2.5-14B-Instruct-Q4_K_M.gguf",
+            "/home/pi/models/Qwen2.5-32B-Instruct-Q4_K_M.gguf",
+            "/opt/models/Qwen2.5-16B-Instruct-Q4_K_M.gguf",
+            "/opt/models/Qwen2.5-14B-Instruct-Q4_K_M.gguf",
+            "/opt/models/Qwen2.5-32B-Instruct-Q4_K_M.gguf",
+            "/home/pi/models/Qwen2.5-7B-Instruct-Q4_K_M.gguf",
+        ],
+    }
+    decode_tokens = {"fast": 220, "balanced": 320, "deep": 480, "ultra": 640}
+    ctx_size = {"fast": 2048, "balanced": 4096, "deep": 8192, "ultra": 12288}
+
+    candidates = model_candidates.get(selected, model_candidates["balanced"])
+    model = _pick_first_existing_model(candidates, current_model)
+    model_low = str(model).lower()
+    n_tokens = decode_tokens.get(selected, 320)
+    ctx = ctx_size.get(selected, 4096)
+
+    # Ultra can fall back to 7B on smaller systems; keep that path memory-safe.
+    if selected == "ultra" and any(x in model_low for x in ["7b", "8b"]):
+        n_tokens = decode_tokens["deep"]
+        ctx = ctx_size["deep"]
+
+    schema = _llm_json_schema(allowed_doc_types)
+    return (
+        f"{binary} -m {model} -n {n_tokens} --temp 0 --ctx-size {ctx} "
+        f"-no-cnv --no-display-prompt --no-warmup --simple-io "
+        f"--json-schema '{schema}' -p \"{{prompt}}\""
+    )
+
+
+def _detect_llm_profile(command_template: str) -> str:
+    cmd = str(command_template or "").strip().lower()
+    if not cmd:
+        return "custom"
+    if cmd.startswith("ollama run"):
+        if "1.5b" in cmd or "2b" in cmd:
+            return "fast"
+        if "16b" in cmd or "32b" in cmd:
+            return "ultra"
+        if "7b" in cmd or "8b" in cmd or "14b" in cmd or "13b" in cmd:
+            return "deep"
+        if "3b" in cmd or "4b" in cmd:
+            return "balanced"
+        return "custom"
+
+    model = _extract_model_path_from_command(cmd).lower()
+    if any(x in model for x in ["1.5b", "2b"]):
+        return "fast"
+    if any(x in model for x in ["16b", "32b"]):
+        return "ultra"
+    if any(x in model for x in ["7b", "8b", "13b", "14b"]):
+        return "deep"
+    if any(x in model for x in ["3b", "4b", "5b", "6b"]):
+        return "balanced"
+    return "custom"
+
+
+def _autofile_window_seconds(value: str) -> int | None:
+    key = str(value or "").strip().lower()
+    if key not in AUTO_FILE_HIGHLIGHT_WINDOWS:
+        return AUTO_FILE_HIGHLIGHT_WINDOWS["1h"]
+    return AUTO_FILE_HIGHLIGHT_WINDOWS[key]
+
+
+def _load_llm_json_health(cfg: AppConfig) -> dict[str, object]:
+    path = Path(getattr(cfg.llm, "json_metrics_path", cfg.paths.state / "llm_json_metrics.json"))
+    default = {
+        "available": False,
+        "total_calls": 0,
+        "json_successes": 0,
+        "json_failures": 0,
+        "consecutive_json_failures": 0,
+        "recent_window_size": 0,
+        "failure_rate_pct": 0.0,
+        "last_mode": "primary",
+        "fallback_active_until_call": 0,
+        "fallback_triggers": 0,
+        "last_result": "",
+        "metrics_path": str(path),
+    }
+
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            payload = json.load(f)
+        if not isinstance(payload, dict):
+            return default
+
+        recent = payload.get("recent_json_results", [])
+        if not isinstance(recent, list):
+            recent = []
+        clean_recent = [1 if int(x) else 0 for x in recent if str(x) in {"0", "1"} or isinstance(x, (int, bool))]
+        window_size = len(clean_recent)
+        failure_rate_pct = 0.0
+        if window_size > 0:
+            failure_rate_pct = (1.0 - (sum(clean_recent) / window_size)) * 100.0
+
+        out = {
+            "available": True,
+            "total_calls": max(0, int(payload.get("total_calls", 0))),
+            "json_successes": max(0, int(payload.get("json_successes", 0))),
+            "json_failures": max(0, int(payload.get("json_failures", 0))),
+            "consecutive_json_failures": max(0, int(payload.get("consecutive_json_failures", 0))),
+            "recent_window_size": window_size,
+            "failure_rate_pct": round(max(0.0, min(100.0, failure_rate_pct)), 1),
+            "last_mode": str(payload.get("last_mode", "primary") or "primary"),
+            "fallback_active_until_call": max(0, int(payload.get("fallback_active_until_call", 0))),
+            "fallback_triggers": max(0, int(payload.get("fallback_triggers", 0))),
+            "last_result": str(payload.get("last_result", "") or ""),
+            "metrics_path": str(path),
+        }
+        return out
+    except Exception:
+        return default
 
 
 def _extract_scan_info(filename: str, fallback_ts: float) -> tuple[float, str]:
@@ -216,6 +424,9 @@ def _scan_bucket(cfg: AppConfig, root: Path, bucket: str, rel_prefix: str = "") 
                 inbox_user="",
                 auto_filed_recent=False,
                 auto_filed_iso="",
+                ai_decision_confidence=None,
+                ai_suggested_type="",
+                ai_suggested_confidence=0.0,
             )
         )
 
@@ -265,8 +476,10 @@ def collect_documents(cfg: AppConfig) -> list[DocumentRecord]:
         if parts and parts[0] in known_users:
             doc.inbox_user = parts[0]
 
-    _attach_keywords(cfg, docs)
+    _attach_keywords(cfg, docs, allow_extract=False)
     _attach_recent_autofile_status(cfg, docs)
+    _attach_recent_ai_decisions(cfg, docs)
+    _attach_recent_ai_suggestions(cfg, docs)
     allowed = cfg.rules.allowed_doc_types
     for d in docs:
         d.suggested_type = _suggest_type(d, allowed, cfg.rules.unknown_doc_type)
@@ -414,7 +627,7 @@ def _record_manual_action(cfg: AppConfig, paths: list[Path]) -> None:
     _save_manual_actions(cfg, actions)
 
 
-def _load_recent_autofile_events(cfg: AppConfig, window_seconds: int = 3600) -> dict[str, float]:
+def _load_recent_autofile_events(cfg: AppConfig, window_seconds: int | None = 3600) -> dict[str, float]:
     path = cfg.paths.state / "events.jsonl"
     if not path.exists():
         return {}
@@ -438,7 +651,7 @@ def _load_recent_autofile_events(cfg: AppConfig, window_seconds: int = 3600) -> 
                     ts = datetime.fromisoformat(ts_raw.replace("Z", "+00:00")).timestamp()
                 except Exception:
                     continue
-                if now - ts > window_seconds:
+                if window_seconds is not None and now - ts > window_seconds:
                     continue
                 parts = Path(destination).parts
                 if "archive" not in parts:
@@ -452,7 +665,8 @@ def _load_recent_autofile_events(cfg: AppConfig, window_seconds: int = 3600) -> 
 
 
 def _attach_recent_autofile_status(cfg: AppConfig, docs: list[DocumentRecord]) -> None:
-    events = _load_recent_autofile_events(cfg, window_seconds=3600)
+    window_seconds = _autofile_window_seconds(cfg.auto_file_highlight_window)
+    events = _load_recent_autofile_events(cfg, window_seconds=window_seconds)
     if not events:
         return
     manual = _load_manual_actions(cfg)
@@ -466,6 +680,139 @@ def _attach_recent_autofile_status(cfg: AppConfig, docs: list[DocumentRecord]) -
             continue
         doc.auto_filed_recent = True
         doc.auto_filed_iso = datetime.fromtimestamp(event_ts).strftime("%Y-%m-%d %H:%M")
+
+
+def _load_recent_ai_suggestion_events(
+    cfg: AppConfig,
+    window_seconds: int = 30 * 24 * 3600,
+) -> dict[str, tuple[float, str, float]]:
+    path = cfg.paths.state / "events.jsonl"
+    if not path.exists():
+        return {}
+
+    now = datetime.now(timezone.utc).timestamp()
+    out: dict[str, tuple[float, str, float]] = {}
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except Exception:
+                    continue
+
+                destination = str(row.get("destination", "")).strip()
+                suggested = str(row.get("suggested_doc_type", "")).strip().lower()
+                if not destination or not suggested:
+                    continue
+
+                ts_raw = str(row.get("timestamp", "")).strip()
+                if not ts_raw:
+                    continue
+                try:
+                    ts = datetime.fromisoformat(ts_raw.replace("Z", "+00:00")).timestamp()
+                except Exception:
+                    continue
+                if now - ts > window_seconds:
+                    continue
+
+                try:
+                    conf = float(row.get("suggested_doc_type_confidence", 0.0) or 0.0)
+                except (TypeError, ValueError):
+                    conf = 0.0
+                conf = max(0.0, min(1.0, conf))
+
+                prev = out.get(destination)
+                if prev is None or ts > prev[0]:
+                    out[destination] = (ts, suggested, conf)
+    except Exception:
+        return {}
+
+    return out
+
+
+def _load_recent_ai_decision_events(
+    cfg: AppConfig,
+    window_seconds: int = 30 * 24 * 3600,
+) -> dict[str, tuple[float, str, float]]:
+    path = cfg.paths.state / "events.jsonl"
+    if not path.exists():
+        return {}
+
+    now = datetime.now(timezone.utc).timestamp()
+    out: dict[str, tuple[float, str, float]] = {}
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except Exception:
+                    continue
+
+                destination = str(row.get("destination", "")).strip()
+                doc_type = str(row.get("doc_type", "")).strip().lower()
+                if not destination or not doc_type:
+                    continue
+
+                ts_raw = str(row.get("timestamp", "")).strip()
+                if not ts_raw:
+                    continue
+                try:
+                    ts = datetime.fromisoformat(ts_raw.replace("Z", "+00:00")).timestamp()
+                except Exception:
+                    continue
+                if now - ts > window_seconds:
+                    continue
+
+                try:
+                    conf = float(row.get("confidence", 0.0) or 0.0)
+                except (TypeError, ValueError):
+                    conf = 0.0
+                conf = max(0.0, min(1.0, conf))
+
+                prev = out.get(destination)
+                if prev is None or ts > prev[0]:
+                    out[destination] = (ts, doc_type, conf)
+    except Exception:
+        return {}
+
+    return out
+
+
+def _attach_recent_ai_decisions(cfg: AppConfig, docs: list[DocumentRecord]) -> None:
+    decisions = _load_recent_ai_decision_events(cfg)
+    if not decisions:
+        return
+
+    for doc in docs:
+        key = str(doc.abs_path.resolve())
+        row = decisions.get(key)
+        if not row:
+            continue
+        _ts, _doc_type, conf = row
+        doc.ai_decision_confidence = conf
+
+
+def _attach_recent_ai_suggestions(cfg: AppConfig, docs: list[DocumentRecord]) -> None:
+    suggestions = _load_recent_ai_suggestion_events(cfg)
+    if not suggestions:
+        return
+
+    for doc in docs:
+        key = str(doc.abs_path.resolve())
+        row = suggestions.get(key)
+        if not row:
+            continue
+        _ts, suggested, conf = row
+        if not suggested:
+            continue
+        doc.ai_suggested_type = suggested
+        doc.ai_suggested_confidence = conf
 
 
 def _learn_keyword_overrides_from_manual_move(
@@ -596,10 +943,17 @@ def _parse_keyword_input(raw: str) -> list[str]:
     return cleaned
 
 
-def _attach_keywords(cfg: AppConfig, docs: list[DocumentRecord]) -> None:
+def _attach_keywords(
+    cfg: AppConfig,
+    docs: list[DocumentRecord],
+    *,
+    allow_extract: bool = True,
+    max_new_extracts: int = 12,
+) -> None:
     index = _load_keyword_index(cfg)
     records: dict = index.get("records", {})
     dirty = False
+    extracted_count = 0
 
     for doc in docs:
         if not doc.abs_path.exists():
@@ -625,6 +979,10 @@ def _attach_keywords(cfg: AppConfig, docs: list[DocumentRecord]) -> None:
                     doc.year = cached_year
             continue
 
+        if not allow_extract or extracted_count >= max_new_extracts:
+            doc.keywords = []
+            continue
+
         text = extract_text(doc.abs_path, max_chars=cfg.keyword_extract_max_chars)
         keywords = _derive_keywords(
             text,
@@ -639,6 +997,7 @@ def _attach_keywords(cfg: AppConfig, docs: list[DocumentRecord]) -> None:
             doc.year = inferred_year
         records[key] = {"sig": sig, "keywords": keywords, "inferred_year": inferred_year}
         dirty = True
+        extracted_count += 1
 
     if dirty:
         index["records"] = records
@@ -1294,15 +1653,29 @@ def create_app(cfg: AppConfig, config_path: Path) -> Flask:
     def index() -> str:
         q = request.args.get("q", "").strip()
         bucket = request.args.get("bucket", "all").strip() or "all"
-        sort_by = request.args.get("sort_by", "received").strip() or "received"
+        sort_by = request.args.get("sort_by", "processed").strip() or "processed"
         sort_dir = request.args.get("sort_dir", "desc").strip() or "desc"
         msg = request.args.get("msg", "").strip()
 
         docs = collect_documents(cfg)
         filtered = [d for d in docs if _matches(d, q, bucket)]
         filtered = _sort_documents(filtered, sort_by, sort_dir)
+        # Keep index rendering responsive while still allowing new keyword auto-population.
+        _attach_keywords(cfg, filtered, allow_extract=True, max_new_extracts=2)
+        allowed = cfg.rules.allowed_doc_types
+        for d in filtered:
+            d.suggested_type = _suggest_type(d, allowed, cfg.rules.unknown_doc_type)
+            if d.doc_type in allowed and d.doc_type != cfg.rules.unknown_doc_type:
+                d.target_default_type = d.doc_type
+            elif d.suggested_type:
+                d.target_default_type = d.suggested_type
+            else:
+                first_allowed = [t for t in allowed if t != cfg.rules.unknown_doc_type]
+                d.target_default_type = first_allowed[0] if first_allowed else cfg.rules.unknown_doc_type
+            d.target_default_year = _default_year_for_doc(d)
         tree_roots = _build_tree_roots(filtered, cfg)
         queue_rows = collect_queue(cfg)
+        llm_json_health = _load_llm_json_health(cfg)
         return_query = urlencode(
             {
                 "q": q,
@@ -1361,11 +1734,25 @@ def create_app(cfg: AppConfig, config_path: Path) -> Flask:
                 "inbox_settle_seconds": int(cfg.inbox_settle_seconds),
                 "require_size_stability": bool(cfg.require_size_stability),
                 "stable_cycles_required": int(cfg.stable_cycles_required),
+                "auto_file_highlight_window": str(cfg.auto_file_highlight_window),
                 "log_level": str(cfg.log_level),
                 "llm_enabled": bool(cfg.llm.enabled),
                 "llm_timeout_seconds": int(cfg.llm.timeout_seconds),
                 "llm_max_input_chars": int(cfg.llm.max_input_chars),
+                "llm_profile": _detect_llm_profile(cfg.llm.command_template),
+                "llm_model_hint": _extract_model_path_from_command(cfg.llm.command_template),
                 "llm_command_template": str(cfg.llm.command_template),
+                "llm_json_metrics_available": bool(llm_json_health.get("available", False)),
+                "llm_json_total_calls": int(llm_json_health.get("total_calls", 0)),
+                "llm_json_successes": int(llm_json_health.get("json_successes", 0)),
+                "llm_json_failures": int(llm_json_health.get("json_failures", 0)),
+                "llm_json_consecutive_failures": int(llm_json_health.get("consecutive_json_failures", 0)),
+                "llm_json_recent_window": int(llm_json_health.get("recent_window_size", 0)),
+                "llm_json_failure_rate_pct": float(llm_json_health.get("failure_rate_pct", 0.0)),
+                "llm_json_last_mode": str(llm_json_health.get("last_mode", "primary")),
+                "llm_json_fallback_until_call": int(llm_json_health.get("fallback_active_until_call", 0)),
+                "llm_json_fallback_triggers": int(llm_json_health.get("fallback_triggers", 0)),
+                "llm_json_last_result": str(llm_json_health.get("last_result", "")),
                 "ocr_enabled": bool(cfg.ocr.enabled),
                 "splitter_enabled": bool(cfg.splitter.enabled),
                 "splitter_min_pages_to_split": int(cfg.splitter.min_pages_to_split),
@@ -1400,6 +1787,10 @@ def create_app(cfg: AppConfig, config_path: Path) -> Flask:
                 ]
             }
         )
+
+    @app.get("/api/llm-json-health")
+    def llm_json_health_api():
+        return jsonify(_load_llm_json_health(cfg))
 
     @app.post("/purge-processing")
     def purge_processing():
@@ -1947,12 +2338,25 @@ def create_app(cfg: AppConfig, config_path: Path) -> Flask:
         inbox_settle_raw = request.form.get("inbox_settle_seconds", "").strip() or str(cfg.inbox_settle_seconds)
         require_size_stability = request.form.get("require_size_stability", "off") == "on"
         stable_cycles_raw = request.form.get("stable_cycles_required", "").strip() or str(cfg.stable_cycles_required)
+        auto_file_highlight_window = request.form.get("auto_file_highlight_window", "").strip().lower() or str(cfg.auto_file_highlight_window)
         log_level = request.form.get("log_level", "").strip().upper() or str(cfg.log_level).upper()
         llm_enabled = request.form.get("llm_enabled", "off") == "on"
         llm_timeout_raw = request.form.get("llm_timeout_seconds", "").strip() or str(cfg.llm.timeout_seconds)
         llm_max_input_raw = request.form.get("llm_max_input_chars", "").strip() or str(cfg.llm.max_input_chars)
+        llm_profile = request.form.get("llm_profile", "").strip().lower() or "custom"
         llm_command_template = request.form.get("llm_command_template", "").strip()
         ocr_enabled = request.form.get("ocr_enabled", "off") == "on"
+
+        if llm_profile not in LLM_PROFILE_CHOICES:
+            return _redirect_index_with_context("LLM profile must be fast, balanced, deep, ultra, or custom", next_query)
+
+        effective_llm_command = llm_command_template
+        if llm_profile != "custom":
+            effective_llm_command = _build_llm_profile_command(
+                llm_profile,
+                llm_command_template or cfg.llm.command_template,
+                cfg.rules.allowed_doc_types,
+            )
 
         try:
             poll_seconds = int(poll_seconds_raw)
@@ -1969,13 +2373,15 @@ def create_app(cfg: AppConfig, config_path: Path) -> Flask:
             return _redirect_index_with_context("inbox_settle_seconds must be 0..600", next_query)
         if stable_cycles_required < 1 or stable_cycles_required > 10:
             return _redirect_index_with_context("stable_cycles_required must be 1..10", next_query)
+        if auto_file_highlight_window not in AUTO_FILE_HIGHLIGHT_WINDOWS:
+            return _redirect_index_with_context("Auto-file highlight duration must be one of: 10m, 1h, 1d, 1w, forever", next_query)
         if llm_timeout_seconds < 30 or llm_timeout_seconds > 1200:
             return _redirect_index_with_context("LLM timeout must be 30..1200 seconds", next_query)
         if llm_max_input_chars < 600 or llm_max_input_chars > 20000:
             return _redirect_index_with_context("LLM max input chars must be 600..20000", next_query)
         if log_level not in {"DEBUG", "INFO", "WARNING", "ERROR"}:
             return _redirect_index_with_context("log_level must be DEBUG, INFO, WARNING, or ERROR", next_query)
-        if llm_enabled and not llm_command_template:
+        if llm_enabled and not effective_llm_command:
             return _redirect_index_with_context("LLM command template cannot be empty when LLM is enabled", next_query)
 
         raw = _load_raw_config(config_path)
@@ -1983,12 +2389,14 @@ def create_app(cfg: AppConfig, config_path: Path) -> Flask:
         raw["inbox_settle_seconds"] = inbox_settle_seconds
         raw["require_size_stability"] = bool(require_size_stability)
         raw["stable_cycles_required"] = stable_cycles_required
+        raw["auto_file_highlight_window"] = auto_file_highlight_window
         raw["log_level"] = log_level
         raw.setdefault("llm", {})
         raw["llm"]["enabled"] = bool(llm_enabled)
         raw["llm"]["timeout_seconds"] = llm_timeout_seconds
         raw["llm"]["max_input_chars"] = llm_max_input_chars
-        raw["llm"]["command_template"] = llm_command_template
+        raw["llm"]["profile"] = llm_profile
+        raw["llm"]["command_template"] = effective_llm_command
         raw.setdefault("ocr", {})
         raw["ocr"]["enabled"] = bool(ocr_enabled)
         _save_raw_config(config_path, raw)
@@ -1997,11 +2405,12 @@ def create_app(cfg: AppConfig, config_path: Path) -> Flask:
         cfg.inbox_settle_seconds = inbox_settle_seconds
         cfg.require_size_stability = bool(require_size_stability)
         cfg.stable_cycles_required = stable_cycles_required
+        cfg.auto_file_highlight_window = auto_file_highlight_window
         cfg.log_level = log_level
         cfg.llm.enabled = bool(llm_enabled)
         cfg.llm.timeout_seconds = llm_timeout_seconds
         cfg.llm.max_input_chars = llm_max_input_chars
-        cfg.llm.command_template = llm_command_template
+        cfg.llm.command_template = effective_llm_command
         cfg.ocr.enabled = bool(ocr_enabled)
 
         return _redirect_index_with_context("Runtime/engine settings updated", next_query)
