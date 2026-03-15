@@ -19,6 +19,9 @@ ocr:
 
 llm:
   enabled: true
+  # Optional profile hint used by the setup UI (fast|balanced|deep|custom).
+  # command_template remains the effective runtime command.
+  profile: balanced
   timeout_seconds: 240
   max_input_chars: 2800
   min_confidence_autofile: 0.60
@@ -31,6 +34,16 @@ llm:
   # If true, a suggested category can be added automatically when confidence is high.
   auto_create_suggested_categories: false
   auto_create_min_confidence: 0.93
+  # Optional backup command used automatically when JSON reliability degrades.
+  fallback_command_template: ""
+  # Metrics file used by the JSON reliability guard.
+  json_metrics_path: /opt/scanner-filer/state/llm_json_metrics.json
+  # Sliding window and thresholds for auto-fallback activation.
+  json_failure_window_size: 40
+  json_failure_rate_threshold: 0.35
+  json_consecutive_failure_threshold: 3
+  # Number of subsequent classify calls to keep fallback command active.
+  json_fallback_cooldown_calls: 10
   # llama.cpp mode: keep {prompt} exactly as-is.
   # Option A – Ollama (recommended, no JSON schema flag needed):
   # command_template: ollama run qwen2.5:3b-instruct
@@ -111,4 +124,7 @@ poll_seconds: 5
 inbox_settle_seconds: 90
 require_size_stability: true
 stable_cycles_required: 2
+# How long to keep auto-file highlight badges visible in the UI:
+# 10m | 1h | 1d | 1w | forever
+auto_file_highlight_window: 1h
 log_level: INFO

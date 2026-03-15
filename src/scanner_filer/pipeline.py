@@ -188,11 +188,17 @@ def process_one_file(src_pdf: Path, cfg: AppConfig, config_path: Path | None = N
             if learned:
                 learned_type, learned_conf, learned_reason = learned
                 if learned_type in cfg.rules.allowed_doc_types and learned_type != cfg.rules.unknown_doc_type:
-                    classification.doc_type = learned_type
-                    classification.confidence = max(classification.confidence, learned_conf)
-                    classification.reason = learned_reason
-                    if "manual_learning" not in classification.tags:
-                        classification.tags.append("manual_learning")
+                    llm_is_weak_or_unknown = (
+                        classification.doc_type == cfg.rules.unknown_doc_type
+                        or classification.confidence < max(0.68, cfg.llm.min_confidence_autofile)
+                        or "fallback" in classification.tags
+                    )
+                    if llm_is_weak_or_unknown:
+                        classification.doc_type = learned_type
+                        classification.confidence = max(classification.confidence, learned_conf)
+                        classification.reason = learned_reason
+                        if "manual_learning" not in classification.tags:
+                            classification.tags.append("manual_learning")
 
             dest = unique_path(
                 build_destination(

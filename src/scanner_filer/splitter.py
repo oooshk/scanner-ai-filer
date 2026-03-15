@@ -10,6 +10,12 @@ from .config import SplitterConfig
 
 logger = logging.getLogger(__name__)
 
+_HEAD_STOPWORDS = {
+    "the", "and", "for", "with", "from", "that", "this", "your", "you", "are", "was", "were", "have",
+    "has", "will", "can", "not", "all", "any", "our", "out", "per", "www", "http", "https", "com",
+    "ltd", "of", "to", "in", "on", "at", "by", "or", "is", "as", "be", "it", "an", "a",
+}
+
 
 def _page_head_text(page, max_chars: int) -> str:
     text = (page.extract_text() or "").strip().lower()
@@ -17,23 +23,64 @@ def _page_head_text(page, max_chars: int) -> str:
     return text[:max_chars]
 
 
-def _looks_like_new_document(curr: str, prev: str, keywords: list[str]) -> bool:
+def _head_tokens(text: str) -> set[str]:
+    words = re.findall(r"[a-z][a-z0-9]{2,}", text.lower())
+    return {w for w in words if w not in _HEAD_STOPWORDS}
+
+
+def _jaccard_similarity(a: set[str], b: set[str]) -> float:
+    if not a and not b:
+        return 1.0
+    if not a or not b:
+        return 0.0
+    inter = len(a & b)
+    union = len(a | b)
+    return (inter / union) if union else 0.0
+
+
+def _boundary_score(curr: str, prev: str, cfg: SplitterConfig) -> tuple[float, float]:
     if not curr:
-        return False
+        return 0.0, 1.0
+
+    score = 0.0
 
     # Strong separator: many generated statements restart numbering from page 1.
     if re.search(r"\bpage\s*1\s*(of|/)\s*\d+\b", curr):
-        return True
+        score += 1.35
 
-    curr_has_kw = any(k.lower() in curr for k in keywords)
-    prev_has_kw = any(k.lower() in prev for k in keywords)
-    if curr_has_kw and not prev_has_kw:
-        return True
+    # Letter/header patterns that often indicate document starts.
+    if re.search(r"\b(dear\s+[a-z]|subject\s*:|to\s*:|from\s*:|invoice\s+no\.?|statement\s+period)\b", curr):
+        score += 0.35
 
-    # New-doc hints: fresh sender + date/account style header near page top.
+    keyword_hits = 0
+    keyword_new_hits = 0
+    for raw_kw in cfg.boundary_keywords:
+        kw = str(raw_kw).strip().lower()
+        if not kw:
+            continue
+        in_curr = kw in curr
+        in_prev = kw in prev
+        if in_curr:
+            keyword_hits += 1
+        if in_curr and not in_prev:
+            keyword_new_hits += 1
+
+    score += min(0.55, keyword_hits * 0.1)
+    score += min(0.45, keyword_new_hits * 0.15)
+
     has_date = re.search(r"\b\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\b", curr) is not None
-    has_account = any(k in curr for k in ["account", "policy", "reference", "customer number"]) 
-    return has_date and has_account
+    has_account = any(k in curr for k in ["account", "policy", "reference", "customer number", "statement", "invoice"])
+    if has_date and has_account:
+        score += 0.35
+
+    curr_tokens = _head_tokens(curr)
+    prev_tokens = _head_tokens(prev)
+    similarity = _jaccard_similarity(curr_tokens, prev_tokens)
+    if cfg.content_aware_enabled and similarity <= cfg.low_similarity_threshold:
+        # Larger drop in lexical overlap increases split confidence.
+        score += min(0.7, (cfg.low_similarity_threshold - similarity + 0.02) * 2.2)
+
+    return score, similarity
 
 
 def _next_available(path: Path) -> Path:
@@ -63,8 +110,16 @@ def split_pdf_if_needed(pdf_path: Path, cfg: SplitterConfig, delete_original: bo
 
     for i in range(1, total):
         curr_head = _page_head_text(reader.pages[i], cfg.max_first_page_chars)
-        if _looks_like_new_document(curr_head, prev_head, cfg.boundary_keywords):
+        score, similarity = _boundary_score(curr_head, prev_head, cfg)
+        if score >= cfg.boundary_score_threshold:
             boundaries.append(i)
+            logger.info(
+                "Split boundary detected in %s at page %s (score=%.2f sim=%.2f)",
+                pdf_path.name,
+                i + 1,
+                score,
+                similarity,
+            )
         prev_head = curr_head
 
     if len(boundaries) == 1:

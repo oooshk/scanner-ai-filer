@@ -14,14 +14,35 @@
       {% if msg %}
       <div class="notice">{{ msg }}</div>
       {% endif %}
-      <form method="post" action="{{ url_for('login') }}" class="setup-form">
+      <form method="post" action="{{ url_for('login') }}" class="setup-form" id="login-form">
         <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
         <input type="hidden" name="next" value="{{ next_url }}">
         <input type="text" name="username" placeholder="Username" autocomplete="username" required>
         <input type="password" name="password" placeholder="Password" autocomplete="current-password" required>
-        <button type="submit">Sign In</button>
+        <button type="submit" id="login-submit" class="login-submit-btn">
+          <span class="btn-label">Sign In</span>
+          <span class="btn-spinner" aria-hidden="true"></span>
+        </button>
       </form>
+      <p class="muted login-status" id="login-status" aria-live="polite"></p>
     </section>
   </main>
+  <script>
+    (function () {
+      const form = document.getElementById('login-form');
+      const submit = document.getElementById('login-submit');
+      const status = document.getElementById('login-status');
+      if (!form || !submit) return;
+
+      form.addEventListener('submit', () => {
+        submit.disabled = true;
+        submit.classList.add('is-loading');
+        submit.setAttribute('aria-busy', 'true');
+        if (status) {
+          status.textContent = 'Signing in...';
+        }
+      });
+    })();
+  </script>
 </body>
 </html>

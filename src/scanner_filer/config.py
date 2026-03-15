@@ -33,9 +33,15 @@ class OCRConfig:
 class LLMConfig:
     enabled: bool
     command_template: str
+    fallback_command_template: str
     timeout_seconds: int
     max_input_chars: int
     min_confidence_autofile: float
+    json_metrics_path: Path
+    json_failure_window_size: int
+    json_failure_rate_threshold: float
+    json_consecutive_failure_threshold: int
+    json_fallback_cooldown_calls: int
     classification_descriptor: str
     classification_guidance: str
     category_suggestion_enabled: bool
@@ -74,6 +80,7 @@ class AppConfig:
     inbox_settle_seconds: int
     require_size_stability: bool
     stable_cycles_required: int
+    auto_file_highlight_window: str
     keyword_extract_max_chars: int
     keyword_extract_limit: int
     keyword_extract_include_phrases: bool
@@ -109,9 +116,15 @@ def load_config(config_path: Path) -> AppConfig:
     llm = LLMConfig(
         enabled=bool(llm_raw.get("enabled", True)),
         command_template=str(llm_raw.get("command_template", "")),
+        fallback_command_template=str(llm_raw.get("fallback_command_template", "")).strip(),
         timeout_seconds=int(llm_raw.get("timeout_seconds", 240)),
         max_input_chars=int(llm_raw.get("max_input_chars", 2800)),
         min_confidence_autofile=float(llm_raw.get("min_confidence_autofile", 0.60)),
+        json_metrics_path=_path(str(llm_raw.get("json_metrics_path", str(paths.state / "llm_json_metrics.json")))),
+        json_failure_window_size=max(10, int(llm_raw.get("json_failure_window_size", 40))),
+        json_failure_rate_threshold=max(0.05, min(0.95, float(llm_raw.get("json_failure_rate_threshold", 0.35)))),
+        json_consecutive_failure_threshold=max(1, int(llm_raw.get("json_consecutive_failure_threshold", 3))),
+        json_fallback_cooldown_calls=max(1, int(llm_raw.get("json_fallback_cooldown_calls", 10))),
         classification_descriptor=str(
             llm_raw.get(
                 "classification_descriptor",
@@ -213,6 +226,11 @@ def load_config(config_path: Path) -> AppConfig:
         inbox_settle_seconds=int(raw.get("inbox_settle_seconds", 20)),
         require_size_stability=bool(raw.get("require_size_stability", True)),
         stable_cycles_required=max(1, int(raw.get("stable_cycles_required", 2))),
+        auto_file_highlight_window=(
+            str(raw.get("auto_file_highlight_window", "1h")).strip().lower()
+            if str(raw.get("auto_file_highlight_window", "1h")).strip().lower() in {"10m", "1h", "1d", "1w", "forever"}
+            else "1h"
+        ),
         keyword_extract_max_chars=max(1200, int(recognition_raw.get("keyword_extract_max_chars", 5000))),
         keyword_extract_limit=max(8, int(recognition_raw.get("keyword_extract_limit", 24))),
         keyword_extract_include_phrases=bool(recognition_raw.get("keyword_extract_include_phrases", True)),

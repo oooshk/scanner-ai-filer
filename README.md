@@ -57,6 +57,36 @@ cifs-utils    samba        samba-common-bin  acl
 - [Ollama](https://ollama.com/) with a model such as `qwen2.5:3b-instruct` (recommended)
 - [llama.cpp](https://github.com/ggerganov/llama.cpp) binary (`llama-completion`)
 
+### Recommended Profile Models (Raspberry Pi)
+
+To use distinct Setup profiles (`Fast`, `Balanced`, `Deep`, `Ultra`) with llama.cpp, install the recommended GGUF models:
+
+```bash
+cd <SCANNER_DIR>
+chmod +x scripts/install_llm_profiles.sh
+./scripts/install_llm_profiles.sh --model-dir /home/pi/models --only all
+```
+
+Profile mapping used by Setup:
+
+- `Fast` -> `Qwen2.5-1.5B-Instruct-Q4_K_M.gguf`
+- `Balanced` -> `Qwen2.5-3B-Instruct-Q4_K_M.gguf`
+- `Deep` -> `Qwen2.5-7B-Instruct-Q4_K_M.gguf`
+- `Ultra` -> `Qwen2.5-14B-Instruct-Q4_K_M.gguf` (16B-class option for stronger reasoning on tricky filing scenarios)
+
+Ultra profile behavior:
+
+- Applies extra scenario-tuned classifier guidance for mixed archives (medical vs payslip, occupational health/employment letters, pension-vs-payslip ambiguity).
+- Biases toward `unknown` for review when evidence is mixed, instead of overconfident payslip mislabels.
+
+You can also install a single tier:
+
+```bash
+./scripts/install_llm_profiles.sh --model-dir /home/pi/models --only balanced
+./scripts/install_llm_profiles.sh --model-dir /home/pi/models --only deep
+./scripts/install_llm_profiles.sh --model-dir /home/pi/models --only ultra
+```
+
 ---
 
 ## Install
@@ -69,6 +99,12 @@ chmod +x install.sh
 ```
 
 The installer creates the virtualenv, installs Python dependencies, copies `config.example.yaml` → `config.yaml`, and creates the runtime directories.
+
+Optional (recommended for profile switching in Setup):
+
+```bash
+./scripts/install_llm_profiles.sh --model-dir /home/pi/models --only all
+```
 
 ---
 
