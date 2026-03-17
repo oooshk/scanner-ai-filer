@@ -253,7 +253,9 @@ def _coerce_payload_shape(payload: dict, rules_cfg: RulesConfig) -> dict:
     reason = str(out.get("reason", "")).strip()
     out["reason"] = reason[:220] if reason else "llm"
 
-    if suggested in rules_cfg.allowed_doc_types:
+    # Keep suggested_doc_type even when it points to an existing allowed category.
+    # This supports review-time "likely category" hints without forcing auto-file.
+    if suggested == out["doc_type"]:
         suggested = ""
     out["suggested_doc_type"] = suggested
     out["suggested_doc_type_confidence"] = _coerce_confidence(out.get("suggested_doc_type_confidence", 0.0))
@@ -441,7 +443,7 @@ def _result_from_json(data: dict, rules_cfg: RulesConfig) -> ClassificationResul
         doc_type = rules_cfg.unknown_doc_type
 
     suggested_doc_type = _normalize_doc_type_name(str(data.get("suggested_doc_type", "")))
-    if suggested_doc_type in rules_cfg.allowed_doc_types:
+    if suggested_doc_type == doc_type:
         suggested_doc_type = ""
 
     try:
@@ -474,43 +476,64 @@ def _result_from_json(data: dict, rules_cfg: RulesConfig) -> ClassificationResul
 
 def _keyword_fallback(text: str, rules_cfg: RulesConfig) -> ClassificationResult:
     low = text.lower()
+    matched_signal = ""
     if any(k in low for k in ["council tax", "local authority", "council bill"]):
         doc_type = "council_tax"
+        matched_signal = "council"
     elif any(k in low for k in ["bank statement", "sort code", "account number", "statement period"]):
         doc_type = "bank_statement"
+        matched_signal = "bank_statement"
     elif any(k in low for k in ["pension", "retirement", "annuity", "state pension"]):
         doc_type = "pension"
+        matched_signal = "pension"
     elif any(k in low for k in ["utility", "electricity", "gas", "water", "broadband"]):
         doc_type = "utility_bill"
-    elif any(k in low for k in ["insurance", "policy number", "premium"]):
+        matched_signal = "utility"
+    elif any(k in low for k in ["insurance", "policy number", "premium", "allianz", "travel cover", "accidental damage", "gadget cover"]):
         doc_type = "insurance"
+        matched_signal = "insurance"
     elif any(k in low for k in ["invoice", "amount due", "bill to"]):
         doc_type = "invoice"
+        matched_signal = "invoice"
     elif any(k in low for k in ["receipt", "total", "paid"]):
         doc_type = "receipt"
+        matched_signal = "receipt"
     elif any(k in low for k in ["lab", "clinic", "patient"]):
         doc_type = "medical"
+        matched_signal = "medical"
     elif any(k in low for k in ["payslip", "pay period", "national insurance"]):
         doc_type = "payslip"
+        matched_signal = "payslip"
     elif any(k in low for k in ["tax", "irs", "hmrc"]):
         doc_type = "tax"
+        matched_signal = "tax"
     elif any(k in low for k in ["contract", "agreement", "terms and conditions"]):
         doc_type = "legal"
+        matched_signal = "legal"
     else:
         doc_type = rules_cfg.unknown_doc_type
 
     if doc_type not in rules_cfg.allowed_doc_types:
         doc_type = rules_cfg.unknown_doc_type
 
+    confidence = 0.45
+    suggested_doc_type = ""
+    suggested_doc_type_confidence = 0.0
+    if doc_type != rules_cfg.unknown_doc_type:
+        # Keep review-safe confidence, but provide a useful hint for UI/review workflows.
+        confidence = 0.52
+        suggested_doc_type = doc_type
+        suggested_doc_type_confidence = 0.80
+
     return ClassificationResult(
         doc_type=doc_type,
         vendor_or_sender="unknown",
         date="",
-        tags=["fallback"],
-        confidence=0.45,
+        tags=["fallback"] + ([f"fallback_signal:{matched_signal}"] if matched_signal else []),
+        confidence=confidence,
         reason="keyword_fallback",
-        suggested_doc_type="",
-        suggested_doc_type_confidence=0.0,
+        suggested_doc_type=suggested_doc_type,
+        suggested_doc_type_confidence=suggested_doc_type_confidence,
     )
 
 
@@ -688,8 +711,9 @@ def classify_text(
         f"doc_type must be one of: {', '.join(rules_cfg.allowed_doc_types)}. "
         "date must be YYYY-MM-DD or empty string. confidence is decimal 0..1 (never percentage). "
         "Use at most 4 short tags and keep reason under 12 words. "
-        "If the best type is not in allowed list, set doc_type to unknown and optionally set suggested_doc_type "
-        "to a short snake_case category name and suggested_doc_type_confidence (0..1). "
+        "If confidence is weak or the document should stay in review, you may set doc_type to unknown and set "
+        "suggested_doc_type to the most likely allowed category with suggested_doc_type_confidence (0..1). "
+        "If the best type is truly not in allowed list, suggested_doc_type may be a short snake_case new category name. "
         "Prioritise semantic document intent over keyword hits. "
         "Behave like a careful filing secretary: classify by what the document is for, not isolated terms. "
         "Do not include markdown.\n"

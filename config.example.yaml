@@ -36,6 +36,13 @@ llm:
   auto_create_min_confidence: 0.93
   # Optional backup command used automatically when JSON reliability degrades.
   fallback_command_template: ""
+  # Optional one-shot reclassification pass when first classification is weak/unknown.
+  # Only used when enabled in Runtime settings.
+  retry_on_failure_enabled: false
+  # same | fast | balanced | deep | ultra
+  retry_profile: deep
+  # Auto-populated by setup UI from selected retry profile.
+  retry_command_template: ""
   # Metrics file used by the JSON reliability guard.
   json_metrics_path: /opt/scanner-filer/state/llm_json_metrics.json
   # Sliding window and thresholds for auto-fallback activation.

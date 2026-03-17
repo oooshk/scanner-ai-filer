@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 import json
 import logging
 import shutil
@@ -18,6 +19,89 @@ from .rules import build_destination, detect_inbox_user, unique_path
 from .splitter import split_pdf_if_needed
 
 logger = logging.getLogger(__name__)
+
+
+def _is_fallback_like(classification) -> bool:
+    reason = str(getattr(classification, "reason", "") or "").lower()
+    tags = [str(t).strip().lower() for t in list(getattr(classification, "tags", []) or [])]
+    if "fallback" in reason or reason in {"keyword_fallback", "llm_type_only_recovery", "negative_type_guard"}:
+        return True
+    return any("fallback" in tag for tag in tags)
+
+
+def _quality_score(cfg: AppConfig, classification) -> float:
+    doc_type = str(getattr(classification, "doc_type", "")).strip().lower()
+    conf = float(getattr(classification, "confidence", 0.0) or 0.0)
+    reason = str(getattr(classification, "reason", "") or "").lower()
+    vendor = str(getattr(classification, "vendor_or_sender", "") or "").strip().lower()
+    date = str(getattr(classification, "date", "") or "").strip()
+
+    score = conf
+    if doc_type == cfg.rules.unknown_doc_type:
+        score -= 0.28
+    if _is_fallback_like(classification):
+        score -= 0.18
+    if reason.startswith("manual_learning:"):
+        score -= 0.04
+    if vendor and vendor != "unknown":
+        score += 0.06
+    if date:
+        score += 0.04
+    return score
+
+
+def _extract_model_hint(command_template: str) -> str:
+    m = re.search(r"(?:^|\s)-m\s+(\S+)", str(command_template or ""))
+    if m:
+        return str(m.group(1)).strip().lower()
+    cmd = str(command_template or "").strip().lower()
+    if cmd.startswith("ollama run"):
+        return cmd
+    return ""
+
+
+def _should_retry_classification(cfg: AppConfig, classification) -> bool:
+    if not bool(getattr(cfg.llm, "retry_on_failure_enabled", False)):
+        return False
+    if not str(getattr(cfg.llm, "retry_command_template", "")).strip():
+        return False
+
+    reason = str(getattr(classification, "reason", "") or "").lower()
+    tags = [str(t).strip().lower() for t in list(getattr(classification, "tags", []) or [])]
+    conf = float(getattr(classification, "confidence", 0.0) or 0.0)
+    doc_type = str(getattr(classification, "doc_type", "")).strip().lower()
+
+    if doc_type == cfg.rules.unknown_doc_type:
+        return True
+    if "fallback" in reason or reason in {"keyword_fallback", "llm_type_only_recovery", "negative_type_guard"}:
+        return True
+    if any("fallback" in tag for tag in tags):
+        return True
+
+    weak_cutoff = max(0.55, float(cfg.llm.min_confidence_autofile) - 0.08)
+    return conf < weak_cutoff
+
+
+def _pick_better_classification(cfg: AppConfig, primary, retry):
+    p_doc = str(getattr(primary, "doc_type", "")).strip().lower()
+    r_doc = str(getattr(retry, "doc_type", "")).strip().lower()
+    p_conf = float(getattr(primary, "confidence", 0.0) or 0.0)
+    r_conf = float(getattr(retry, "confidence", 0.0) or 0.0)
+
+    if p_doc == cfg.rules.unknown_doc_type and r_doc != cfg.rules.unknown_doc_type:
+        return retry
+    if r_doc == cfg.rules.unknown_doc_type and p_doc != cfg.rules.unknown_doc_type:
+        return primary
+    if _is_fallback_like(primary) and not _is_fallback_like(retry) and r_conf >= max(0.50, p_conf - 0.02):
+        return retry
+
+    p_score = _quality_score(cfg, primary)
+    r_score = _quality_score(cfg, retry)
+    if r_score >= p_score + 0.03:
+        return retry
+    if r_conf >= p_conf + 0.08:
+        return retry
+    return primary
 
 
 def _load_raw_config(config_path: Path) -> dict:
@@ -55,8 +139,12 @@ def _maybe_apply_category_suggestion(
 
     suggested = _normalize_doc_type_name(getattr(classification, "suggested_doc_type", ""))
     suggestion_conf = float(getattr(classification, "suggested_doc_type_confidence", 0.0) or 0.0)
-    if not suggested or suggested in cfg.rules.allowed_doc_types:
+    if not suggested:
         return False, ""
+
+    # Existing category suggestions are review hints only (no auto-create needed).
+    if suggested in cfg.rules.allowed_doc_types:
+        return False, suggested
 
     # Require high confidence before using or creating new categories.
     min_conf = float(getattr(cfg.llm, "auto_create_min_confidence", 0.93) or 0.93)
@@ -165,7 +253,7 @@ def process_one_file(src_pdf: Path, cfg: AppConfig, config_path: Path | None = N
                 cfg,
                 source=str(src_pdf),
                 working=str(part_pdf),
-                stage="classifying",
+                stage="classifying_primary",
                 percent=base_pct,
                 part_index=idx,
                 parts_total=len(parts),
@@ -179,6 +267,68 @@ def process_one_file(src_pdf: Path, cfg: AppConfig, config_path: Path | None = N
                 public_online_lookup_enabled=cfg.public_online_lookup_enabled,
                 public_acronym_overrides=cfg.public_acronym_overrides,
             )
+
+            if _should_retry_classification(cfg, classification):
+                set_active(
+                    cfg,
+                    source=str(src_pdf),
+                    working=str(part_pdf),
+                    stage="rechecking_second_pass",
+                    percent=min(96, base_pct + 8),
+                    part_index=idx,
+                    parts_total=len(parts),
+                )
+                retry_guidance = str(getattr(cfg.llm, "classification_guidance", "") or "").strip()
+                retry_guidance = (
+                    f"{retry_guidance}\n\n"
+                    "Second-pass audit instructions: reconsider from first principles using full context. "
+                    "Avoid keyword fallback bias when evidence supports a better semantic category. "
+                    "If still uncertain, keep unknown."
+                ).strip()
+
+                retry_cfg = replace(
+                    cfg.llm,
+                    command_template=str(cfg.llm.retry_command_template).strip(),
+                    fallback_command_template="",
+                    json_metrics_path=(cfg.paths.state / "llm_json_metrics_retry.json"),
+                    classification_guidance=retry_guidance,
+                )
+                primary_before_retry = classification
+                retry_text = text
+                if len(text) >= max(200, int(cfg.llm.max_input_chars * 0.92)):
+                    expanded_chars = min(12000, max(int(cfg.llm.max_input_chars * 2), int(cfg.llm.max_input_chars + 1800)))
+                    if expanded_chars > cfg.llm.max_input_chars:
+                        expanded_text = extract_text(part_pdf, max_chars=expanded_chars)
+                        if len(expanded_text) > len(text):
+                            retry_text = expanded_text
+                            if "retry_expanded_context" not in classification.tags:
+                                classification.tags.append("retry_expanded_context")
+
+                primary_model = _extract_model_hint(cfg.llm.command_template)
+                retry_model = _extract_model_hint(retry_cfg.command_template)
+                if primary_model and retry_model and primary_model == retry_model:
+                    if "retry_same_model" not in classification.tags:
+                        classification.tags.append("retry_same_model")
+
+                retry_result = classify_text(
+                    retry_text,
+                    retry_cfg,
+                    cfg.rules,
+                    public_knowledge_enabled=cfg.public_knowledge_enabled,
+                    public_online_lookup_enabled=cfg.public_online_lookup_enabled,
+                    public_acronym_overrides=cfg.public_acronym_overrides,
+                )
+                chosen = _pick_better_classification(cfg, primary_before_retry, retry_result)
+                if chosen is retry_result:
+                    if "retry_attempted" not in retry_result.tags:
+                        retry_result.tags.append("retry_attempted")
+                    if "retry_pass" not in retry_result.tags:
+                        retry_result.tags.append("retry_pass")
+                    classification = retry_result
+                else:
+                    if "retry_attempted" not in classification.tags:
+                        classification.tags.append("retry_attempted")
+
             category_created, category_suggested = _maybe_apply_category_suggestion(cfg, classification, config_path)
             if category_suggested and not category_created:
                 tag = f"category_suggested:{category_suggested}"

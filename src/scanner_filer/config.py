@@ -47,6 +47,9 @@ class LLMConfig:
     category_suggestion_enabled: bool
     auto_create_suggested_categories: bool
     auto_create_min_confidence: float
+    retry_on_failure_enabled: bool
+    retry_profile: str
+    retry_command_template: str
 
 
 @dataclass
@@ -135,6 +138,9 @@ def load_config(config_path: Path) -> AppConfig:
         category_suggestion_enabled=bool(llm_raw.get("category_suggestion_enabled", True)),
         auto_create_suggested_categories=bool(llm_raw.get("auto_create_suggested_categories", False)),
         auto_create_min_confidence=max(0.0, min(1.0, float(llm_raw.get("auto_create_min_confidence", 0.93)))),
+        retry_on_failure_enabled=bool(llm_raw.get("retry_on_failure_enabled", False)),
+        retry_profile=str(llm_raw.get("retry_profile", "deep")).strip().lower() or "deep",
+        retry_command_template=str(llm_raw.get("retry_command_template", "")).strip(),
     )
     splitter_raw: dict[str, Any] = raw.get("splitter", {})
     splitter = SplitterConfig(

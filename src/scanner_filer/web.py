@@ -23,7 +23,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 from .config import AppConfig, ensure_directories, load_config
 from .manual_learning import record_manual_learning
 from .ocr import extract_text
-from .progress_state import clear_active, read_progress
+from .progress_state import clear_active, read_progress, set_active
 from .rules import unique_path
 from .splitter import split_pdf_at_starts, split_pdf_if_needed
 
@@ -50,6 +50,8 @@ class DocumentRecord:
     auto_filed_recent: bool
     auto_filed_iso: str
     ai_decision_confidence: float | None
+    ai_retry_pass: bool
+    ai_retry_state: str
     ai_suggested_type: str
     ai_suggested_confidence: float
 
@@ -71,20 +73,71 @@ STOPWORDS = {
 }
 
 LOW_SIGNAL_OVERRIDE_WORDS = {
+    "a",
+    "an",
+    "and",
+    "are",
+    "as",
     "act",
     "age",
     "after",
     "affect",
     "address",
+    "being",
+    "by",
     "car",
+    "details",
+    "do",
+    "email",
+    "for",
+    "from",
+    "have",
+    "in",
     "income",
+    "is",
     "may",
+    "of",
+    "on",
+    "or",
     "parts",
+    "please",
+    "service",
     "take",
+    "than",
+    "that",
+    "the",
+    "then",
+    "this",
+    "to",
     "total",
+    "was",
+    "with",
+    "you",
 }
 
 ALLOWED_SINGLE_WORD_OVERRIDES = {"dvsa", "hmrc", "nhs", "v5c", "vin", "mot"}
+GENERIC_SINGLE_WORD_BLOCKLIST = {
+    "account",
+    "address",
+    "amount",
+    "certificate",
+    "cover",
+    "date",
+    "details",
+    "document",
+    "information",
+    "invoice",
+    "number",
+    "page",
+    "payment",
+    "period",
+    "policy",
+    "reference",
+    "service",
+    "statement",
+    "terms",
+    "total",
+}
 
 
 def _is_high_signal_override_phrase(value: str) -> bool:
@@ -95,15 +148,34 @@ def _is_high_signal_override_phrase(value: str) -> bool:
         return False
     if token in LOW_SIGNAL_OVERRIDE_WORDS:
         return False
+
     parts = token.split(" ")
-    if len(parts) >= 2:
-        return True
-    single = parts[0]
-    if single in ALLOWED_SINGLE_WORD_OVERRIDES:
-        return True
-    if len(single) < 5:
+
+    # Single-word rules are too risky unless explicitly whitelisted.
+    if len(parts) == 1:
+        single = parts[0]
+        if single in ALLOWED_SINGLE_WORD_OVERRIDES:
+            return True
+        if len(single) < 5:
+            return False
+        if single in STOPWORDS or single in LOW_SIGNAL_OVERRIDE_WORDS or single in GENERIC_SINGLE_WORD_BLOCKLIST:
+            return False
+        # Allow distinctive single words, but they will still need repeated evidence downstream.
+        return bool(re.search(r"[0-9._-]", single) or len(single) >= 7)
+
+    # Reject phrases that begin/end with weak connector words.
+    if parts[0] in LOW_SIGNAL_OVERRIDE_WORDS or parts[-1] in LOW_SIGNAL_OVERRIDE_WORDS:
         return False
-    return single not in LOW_SIGNAL_OVERRIDE_WORDS
+
+    strong_tokens = [p for p in parts if len(p) >= 4 and p not in STOPWORDS and p not in LOW_SIGNAL_OVERRIDE_WORDS]
+    if len(strong_tokens) < 1:
+        return False
+
+    # Avoid generic 2-word phrases where both words are weakly informative.
+    if len(parts) <= 2 and any(p in LOW_SIGNAL_OVERRIDE_WORDS for p in parts):
+        return False
+
+    return True
 
 
 CATEGORY_HINTS: dict[str, list[str]] = {
@@ -122,6 +194,7 @@ CATEGORY_HINTS: dict[str, list[str]] = {
 }
 
 LLM_PROFILE_CHOICES = {"fast", "balanced", "deep", "ultra", "custom"}
+LLM_RETRY_PROFILE_CHOICES = {"same", "fast", "balanced", "deep", "ultra"}
 AUTO_FILE_HIGHLIGHT_WINDOWS: dict[str, int | None] = {
     "10m": 10 * 60,
     "1h": 60 * 60,
@@ -425,6 +498,8 @@ def _scan_bucket(cfg: AppConfig, root: Path, bucket: str, rel_prefix: str = "") 
                 auto_filed_recent=False,
                 auto_filed_iso="",
                 ai_decision_confidence=None,
+                ai_retry_pass=False,
+                ai_retry_state="",
                 ai_suggested_type="",
                 ai_suggested_confidence=0.0,
             )
@@ -517,6 +592,10 @@ def collect_queue(cfg: AppConfig) -> list[QueueRecord]:
         if cfg.inbox_settle_seconds > 0:
             settle_pct = min(1.0, age / float(cfg.inbox_settle_seconds))
         pct = int(5 + settle_pct * 45)
+        stage = "waiting_for_settle"
+        if p.name == active_name and active_stage in {"requeueing", "queued_for_recheck"}:
+            stage = active_stage
+            pct = max(1, min(99, active_percent or pct))
         try:
             rel = p.relative_to(cfg.paths.inbox)
             rel_parent = str(rel.parent)
@@ -527,7 +606,7 @@ def collect_queue(cfg: AppConfig) -> list[QueueRecord]:
             QueueRecord(
                 filename=p.name,
                 location=inbox_loc,
-                stage="waiting_for_settle",
+                stage=stage,
                 percent=pct,
                 size_kb=round(stat.st_size / 1024.0, 1),
                 modified_iso=datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M"),
@@ -736,13 +815,13 @@ def _load_recent_ai_suggestion_events(
 def _load_recent_ai_decision_events(
     cfg: AppConfig,
     window_seconds: int = 30 * 24 * 3600,
-) -> dict[str, tuple[float, str, float]]:
+) -> dict[str, tuple[float, str, float, str]]:
     path = cfg.paths.state / "events.jsonl"
     if not path.exists():
         return {}
 
     now = datetime.now(timezone.utc).timestamp()
-    out: dict[str, tuple[float, str, float]] = {}
+    out: dict[str, tuple[float, str, float, str]] = {}
     try:
         with path.open("r", encoding="utf-8") as f:
             for line in f:
@@ -775,9 +854,18 @@ def _load_recent_ai_decision_events(
                     conf = 0.0
                 conf = max(0.0, min(1.0, conf))
 
+                tags_raw = row.get("tags", [])
+                retry_state = ""
+                if isinstance(tags_raw, list):
+                    tags = {str(tag).strip().lower() for tag in tags_raw}
+                    if "retry_pass" in tags:
+                        retry_state = "used"
+                    elif "retry_attempted" in tags:
+                        retry_state = "checked"
+
                 prev = out.get(destination)
                 if prev is None or ts > prev[0]:
-                    out[destination] = (ts, doc_type, conf)
+                    out[destination] = (ts, doc_type, conf, retry_state)
     except Exception:
         return {}
 
@@ -794,8 +882,10 @@ def _attach_recent_ai_decisions(cfg: AppConfig, docs: list[DocumentRecord]) -> N
         row = decisions.get(key)
         if not row:
             continue
-        _ts, _doc_type, conf = row
+        _ts, _doc_type, conf, retry_state = row
         doc.ai_decision_confidence = conf
+        doc.ai_retry_state = retry_state
+        doc.ai_retry_pass = retry_state in {"used", "checked"}
 
 
 def _attach_recent_ai_suggestions(cfg: AppConfig, docs: list[DocumentRecord]) -> None:
@@ -813,6 +903,149 @@ def _attach_recent_ai_suggestions(cfg: AppConfig, docs: list[DocumentRecord]) ->
             continue
         doc.ai_suggested_type = suggested
         doc.ai_suggested_confidence = conf
+
+
+def _llm_rule_feedback_path(cfg: AppConfig) -> Path:
+    return cfg.paths.state / "llm_rule_feedback.json"
+
+
+def _load_llm_rule_feedback(cfg: AppConfig) -> dict[str, Any]:
+    path = _llm_rule_feedback_path(cfg)
+    if not path.exists():
+        return {"rejected_pairs": []}
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, dict):
+            rows = data.get("rejected_pairs", [])
+            if isinstance(rows, list):
+                data["rejected_pairs"] = [str(x).strip().lower() for x in rows if str(x).strip()]
+            else:
+                data["rejected_pairs"] = []
+            return data
+    except Exception:
+        pass
+    return {"rejected_pairs": []}
+
+
+def _save_llm_rule_feedback(cfg: AppConfig, payload: dict[str, Any]) -> None:
+    path = _llm_rule_feedback_path(cfg)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    rows = payload.get("rejected_pairs", []) if isinstance(payload.get("rejected_pairs", []), list) else []
+    cleaned = sorted(set(str(x).strip().lower() for x in rows if str(x).strip()))[:5000]
+    out = {"rejected_pairs": cleaned}
+    with path.open("w", encoding="utf-8") as f:
+        json.dump(out, f, ensure_ascii=True, indent=2)
+
+
+def _rule_pair_key(phrase: str, target: str) -> str:
+    p = re.sub(r"\s+", " ", str(phrase).strip().lower())
+    t = str(target).strip().lower()
+    return f"{p}=>{t}"
+
+
+def _split_rule_pair_key(value: str) -> tuple[str, str]:
+    raw = str(value or "")
+    if "=>" not in raw:
+        return raw.strip().lower(), ""
+    left, right = raw.split("=>", 1)
+    return left.strip().lower(), right.strip().lower()
+
+
+def _normalize_rule_phrase(value: str) -> str:
+    phrase = re.sub(r"\s+", " ", str(value or "").strip().lower())
+    return phrase.strip(" ,")
+
+
+def _build_llm_rule_candidates(
+    cfg: AppConfig,
+    docs: list[DocumentRecord],
+    feedback: dict[str, Any],
+    *,
+    max_candidates: int = 30,
+    min_conf: float = 0.72,
+) -> list[dict[str, Any]]:
+    rejected_rows = feedback.get("rejected_pairs", []) if isinstance(feedback.get("rejected_pairs"), list) else []
+    rejected = {str(x).strip().lower() for x in rejected_rows if str(x).strip()}
+    existing = {str(k).strip().lower(): str(v).strip().lower() for k, v in cfg.rules.keyword_overrides.items() if str(k).strip() and str(v).strip()}
+
+    scores: dict[str, dict[str, Any]] = {}
+    for doc in docs:
+        if doc.bucket not in {"review", "archive"}:
+            continue
+
+        target = str(doc.ai_suggested_type or "").strip().lower()
+        conf = float(doc.ai_suggested_confidence or 0.0)
+        target_source = "suggested"
+        if not target:
+            decision_target = str(doc.doc_type or "").strip().lower()
+            decision_conf = float(doc.ai_decision_confidence or 0.0)
+            if (
+                decision_target in cfg.rules.allowed_doc_types
+                and decision_target != cfg.rules.unknown_doc_type
+                and decision_conf >= max(0.88, min_conf + 0.12)
+            ):
+                target = decision_target
+                conf = decision_conf
+                target_source = "decision"
+
+        if target not in cfg.rules.allowed_doc_types or target == cfg.rules.unknown_doc_type:
+            continue
+        if conf < min_conf:
+            continue
+
+        for raw_kw in list(doc.keywords or [])[:24]:
+            phrase = _normalize_rule_phrase(raw_kw)
+            if not phrase or phrase in STOPWORDS:
+                continue
+            if not _is_high_signal_override_phrase(phrase):
+                continue
+            if existing.get(phrase, "") == target:
+                continue
+
+            pair = _rule_pair_key(phrase, target)
+            if pair in rejected:
+                continue
+
+            row = scores.get(pair)
+            if row is None:
+                row = {
+                    "phrase": phrase,
+                    "target": target,
+                    "count": 0,
+                    "max_conf": 0.0,
+                    "example_rel_path": doc.rel_path,
+                    "single_word": " " not in phrase,
+                    "sources": set(),
+                }
+                scores[pair] = row
+            row["count"] = int(row.get("count", 0)) + 1
+            row["max_conf"] = max(float(row.get("max_conf", 0.0)), conf)
+            cast_sources = row.get("sources")
+            if isinstance(cast_sources, set):
+                cast_sources.add(target_source)
+
+    candidates = list(scores.values())
+    # Be conservative: require repeated evidence and high confidence.
+    filtered: list[dict[str, Any]] = []
+    for r in candidates:
+        count = int(r.get("count", 0))
+        max_conf_row = float(r.get("max_conf", 0.0))
+        single_word = bool(r.get("single_word", False))
+        if single_word:
+            if count >= 3 and max_conf_row >= 0.88:
+                filtered.append(r)
+            continue
+        if (count >= 2 and max_conf_row >= 0.78) or count >= 3:
+            filtered.append(r)
+    candidates = filtered
+    candidates.sort(key=lambda r: (-int(r.get("count", 0)), -float(r.get("max_conf", 0.0)), str(r.get("phrase", ""))))
+
+    for row in candidates:
+        if isinstance(row.get("sources"), set):
+            row["sources"] = sorted(list(row["sources"]))
+
+    return candidates[: max(1, int(max_candidates))]
 
 
 def _learn_keyword_overrides_from_manual_move(
@@ -1179,10 +1412,26 @@ def _requeue_parts_to_inbox(cfg: AppConfig, parts: list[Path], inbox_user: str |
     if inbox_user:
         inbox_root = inbox_root / inbox_user
     inbox_root.mkdir(parents=True, exist_ok=True)
+    if parts:
+        set_active(
+            cfg,
+            source=str(parts[0]),
+            working=str(parts[0]),
+            stage="requeueing",
+            percent=2,
+        )
     for part in parts:
         dst = unique_path(inbox_root / part.name)
         shutil.move(str(part), str(dst))
         moved.append(dst)
+    if moved:
+        set_active(
+            cfg,
+            source=str(parts[0]),
+            working=str(moved[0]),
+            stage="queued_for_recheck",
+            percent=8,
+        )
     return moved
 
 
@@ -1199,11 +1448,49 @@ def _save_raw_config(config_path: Path, raw: dict) -> None:
         yaml.safe_dump(raw, f, sort_keys=False)
 
 
+def _email_intake_config_path() -> Path:
+    return _project_root() / "bolt_on" / "email_intake" / "config.yaml"
+
+
+def _email_intake_example_config_path() -> Path:
+    return _project_root() / "bolt_on" / "email_intake" / "config.example.yaml"
+
+
+def _load_email_intake_config() -> dict:
+    path = _email_intake_config_path()
+    if not path.exists():
+        return {}
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+        if isinstance(data, dict):
+            return data
+    except Exception:
+        pass
+    return {}
+
+
+def _save_email_intake_config(raw: dict) -> None:
+    path = _email_intake_config_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as f:
+        yaml.safe_dump(raw, f, sort_keys=False)
+
+
+def _email_intake_ui_url(raw: dict, request_host: str) -> str:
+    web_ui = raw.get("web_ui", {}) if isinstance(raw.get("web_ui"), dict) else {}
+    host = str(web_ui.get("host", "127.0.0.1")).strip() or "127.0.0.1"
+    port = int(web_ui.get("port", 8091) or 8091)
+    if host in {"0.0.0.0", "::"}:
+        host = str(request_host or "127.0.0.1").split(":", 1)[0] or "127.0.0.1"
+    return f"http://{host}:{port}/"
+
+
 def _redirect_index_with_context(msg: str, next_query: str = ""):
     params: dict[str, str] = {"msg": msg}
     if next_query:
         parsed = parse_qs(next_query, keep_blank_values=False)
-        for key in ("q", "bucket", "sort_by", "sort_dir"):
+        for key in ("q", "bucket", "sort_by", "sort_dir", "page", "page_size"):
             val = parsed.get(key, [""])[0].strip()
             if val:
                 params[key] = val
@@ -1482,6 +1769,14 @@ def _load_or_create_web_secret(cfg: AppConfig) -> str:
         return secrets.token_hex(32)
 
 
+def _shared_session_cookie_name() -> str:
+    raw = os.environ.get("SCANNER_WEB_SESSION_COOKIE", "").strip()
+    if raw:
+        return raw
+    # Default shared cookie name for scanner + email intake web UIs.
+    return "scanner_session"
+
+
 def create_app(cfg: AppConfig, config_path: Path) -> Flask:
     app = Flask(__name__, template_folder="templates", static_folder="static")
     secret = _load_or_create_web_secret(cfg)
@@ -1491,6 +1786,7 @@ def create_app(cfg: AppConfig, config_path: Path) -> Flask:
     app.config["SESSION_COOKIE_HTTPONLY"] = True
     app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
     app.config["SESSION_COOKIE_SECURE"] = _env_bool("SCANNER_WEB_SECURE_COOKIE", False)
+    app.config["SESSION_COOKIE_NAME"] = _shared_session_cookie_name()
     app.config["MAX_CONTENT_LENGTH"] = 1024 * 1024 * 512  # 512 MiB upload cap for backup restore
 
     app.config["AUTH_USER"] = os.environ.get("SCANNER_WEB_USER", "admin")
@@ -1655,15 +1951,42 @@ def create_app(cfg: AppConfig, config_path: Path) -> Flask:
         bucket = request.args.get("bucket", "all").strip() or "all"
         sort_by = request.args.get("sort_by", "processed").strip() or "processed"
         sort_dir = request.args.get("sort_dir", "desc").strip() or "desc"
+        focus_rel = request.args.get("focus_rel", "").strip()
+        try:
+            page = int(request.args.get("page", "1") or "1")
+        except ValueError:
+            page = 1
+        page = max(1, page)
+        try:
+            page_size = int(request.args.get("page_size", "100") or "100")
+        except ValueError:
+            page_size = 100
+        if page_size not in {25, 50, 100, 200}:
+            page_size = 100
         msg = request.args.get("msg", "").strip()
 
         docs = collect_documents(cfg)
         filtered = [d for d in docs if _matches(d, q, bucket)]
         filtered = _sort_documents(filtered, sort_by, sort_dir)
+
+        if focus_rel:
+            for i, row in enumerate(filtered):
+                if str(row.rel_path) == focus_rel:
+                    page = (i // page_size) + 1
+                    break
+
+        total_docs = len(filtered)
+        total_pages = max(1, (total_docs + page_size - 1) // page_size)
+        if page > total_pages:
+            page = total_pages
+        page_start = (page - 1) * page_size
+        page_end = page_start + page_size
+        page_docs = filtered[page_start:page_end]
+
         # Keep index rendering responsive while still allowing new keyword auto-population.
-        _attach_keywords(cfg, filtered, allow_extract=True, max_new_extracts=2)
+        _attach_keywords(cfg, page_docs, allow_extract=True, max_new_extracts=2)
         allowed = cfg.rules.allowed_doc_types
-        for d in filtered:
+        for d in page_docs:
             d.suggested_type = _suggest_type(d, allowed, cfg.rules.unknown_doc_type)
             if d.doc_type in allowed and d.doc_type != cfg.rules.unknown_doc_type:
                 d.target_default_type = d.doc_type
@@ -1676,26 +1999,50 @@ def create_app(cfg: AppConfig, config_path: Path) -> Flask:
         tree_roots = _build_tree_roots(filtered, cfg)
         queue_rows = collect_queue(cfg)
         llm_json_health = _load_llm_json_health(cfg)
+        llm_rule_feedback = _load_llm_rule_feedback(cfg)
+        llm_rule_candidates = _build_llm_rule_candidates(cfg, docs, llm_rule_feedback)
+        rejected_pairs_raw = llm_rule_feedback.get("rejected_pairs", []) if isinstance(llm_rule_feedback.get("rejected_pairs"), list) else []
+        llm_rule_rejected = []
+        for raw_pair in rejected_pairs_raw[:100]:
+            phrase, target = _split_rule_pair_key(str(raw_pair))
+            if phrase and target:
+                llm_rule_rejected.append({"pair": str(raw_pair), "phrase": phrase, "target": target})
+        email_intake_cfg = _load_email_intake_config()
         return_query = urlencode(
             {
                 "q": q,
                 "bucket": bucket,
                 "sort_by": sort_by,
                 "sort_dir": sort_dir,
+                "page": str(page),
+                "page_size": str(page_size),
             }
         )
 
         return render_template(
             "index.html",
-            documents=filtered,
+            documents=page_docs,
+            total_docs=total_docs,
+            page_size=page_size,
+            current_page=page,
+            total_pages=total_pages,
+            page_start_index=(page_start + 1) if total_docs > 0 else 0,
+            page_end_index=min(page_end, total_docs),
             inbox_users=sorted([str(name) for name in _load_user_inboxes(cfg).keys() if str(name).strip()]),
             q=q,
             bucket=bucket,
             sort_by=sort_by,
             sort_dir=sort_dir,
+            focus_rel=focus_rel,
+            keyword_override_rows=sorted(cfg.rules.keyword_overrides.items(), key=lambda kv: str(kv[0]).lower()),
+            llm_rule_candidates=llm_rule_candidates,
+            llm_rule_rejected=llm_rule_rejected,
             return_query=return_query,
             msg=msg,
-            allowed_types=[t for t in cfg.rules.allowed_doc_types if t != cfg.rules.unknown_doc_type],
+            allowed_types=sorted(
+                [t for t in cfg.rules.allowed_doc_types if t != cfg.rules.unknown_doc_type],
+                key=lambda s: str(s).lower(),
+            ),
             setup_defaults={
                 "archive": str(cfg.paths.archive),
                 "review": str(cfg.paths.review),
@@ -1742,6 +2089,8 @@ def create_app(cfg: AppConfig, config_path: Path) -> Flask:
                 "llm_profile": _detect_llm_profile(cfg.llm.command_template),
                 "llm_model_hint": _extract_model_path_from_command(cfg.llm.command_template),
                 "llm_command_template": str(cfg.llm.command_template),
+                "llm_retry_on_failure_enabled": bool(getattr(cfg.llm, "retry_on_failure_enabled", False)),
+                "llm_retry_profile": str(getattr(cfg.llm, "retry_profile", "deep") or "deep"),
                 "llm_json_metrics_available": bool(llm_json_health.get("available", False)),
                 "llm_json_total_calls": int(llm_json_health.get("total_calls", 0)),
                 "llm_json_successes": int(llm_json_health.get("json_successes", 0)),
@@ -1753,6 +2102,9 @@ def create_app(cfg: AppConfig, config_path: Path) -> Flask:
                 "llm_json_fallback_until_call": int(llm_json_health.get("fallback_active_until_call", 0)),
                 "llm_json_fallback_triggers": int(llm_json_health.get("fallback_triggers", 0)),
                 "llm_json_last_result": str(llm_json_health.get("last_result", "")),
+                "email_intake_available": bool(email_intake_cfg),
+                "email_intake_enabled": bool(email_intake_cfg.get("enabled", False)),
+                "email_intake_ui_url": _email_intake_ui_url(email_intake_cfg, request.host),
                 "ocr_enabled": bool(cfg.ocr.enabled),
                 "splitter_enabled": bool(cfg.splitter.enabled),
                 "splitter_min_pages_to_split": int(cfg.splitter.min_pages_to_split),
@@ -2165,6 +2517,8 @@ def create_app(cfg: AppConfig, config_path: Path) -> Flask:
     def setup_ai():
         next_query = request.form.get("next", "").strip()
         confidence_raw = request.form.get("min_confidence_autofile", "").strip()
+        llm_retry_on_failure_enabled = request.form.get("llm_retry_on_failure_enabled", "off") == "on"
+        llm_retry_profile = request.form.get("llm_retry_profile", "").strip().lower() or str(getattr(cfg.llm, "retry_profile", "deep") or "deep")
         descriptor = request.form.get("classification_descriptor", "").strip()
         guidance = request.form.get("classification_guidance", "").strip()
         category_suggestion_enabled = request.form.get("category_suggestion_enabled", "off") == "on"
@@ -2198,6 +2552,8 @@ def create_app(cfg: AppConfig, config_path: Path) -> Flask:
             return _redirect_index_with_context("AI confidence threshold must be between 0 and 1", next_query)
         if auto_create_min_confidence < 0.0 or auto_create_min_confidence > 1.0:
             return _redirect_index_with_context("Auto-create confidence must be between 0 and 1", next_query)
+        if llm_retry_profile not in LLM_RETRY_PROFILE_CHOICES:
+            return _redirect_index_with_context("Second-pass profile must be same, fast, balanced, deep, or ultra", next_query)
         if len(descriptor) > 2000:
             return _redirect_index_with_context("AI descriptor is too long (max 2000 characters)", next_query)
         if len(guidance) > 2000:
@@ -2273,6 +2629,13 @@ def create_app(cfg: AppConfig, config_path: Path) -> Flask:
                 return _redirect_index_with_context(f"Unknown target type '{val}' for acronym '{key}'", next_query)
             public_acronym_overrides_clean[key] = val
 
+        retry_base_command = str(getattr(cfg.llm, "command_template", "") or "").strip()
+        retry_llm_command = (
+            retry_base_command
+            if llm_retry_profile == "same"
+            else _build_llm_profile_command(llm_retry_profile, retry_base_command, cfg.rules.allowed_doc_types)
+        )
+
         raw = _load_raw_config(config_path)
         raw.setdefault("llm", {})
         raw["llm"]["min_confidence_autofile"] = round(confidence, 3)
@@ -2281,6 +2644,9 @@ def create_app(cfg: AppConfig, config_path: Path) -> Flask:
         raw["llm"]["category_suggestion_enabled"] = bool(category_suggestion_enabled)
         raw["llm"]["auto_create_suggested_categories"] = bool(auto_create_suggested_categories)
         raw["llm"]["auto_create_min_confidence"] = round(auto_create_min_confidence, 3)
+        raw["llm"]["retry_on_failure_enabled"] = bool(llm_retry_on_failure_enabled)
+        raw["llm"]["retry_profile"] = llm_retry_profile
+        raw["llm"]["retry_command_template"] = retry_llm_command
         raw.setdefault("rules", {})
         raw["rules"]["per_type_min_confidence"] = per_type_clean
         raw["rules"]["keyword_overrides"] = keyword_overrides_clean
@@ -2311,6 +2677,9 @@ def create_app(cfg: AppConfig, config_path: Path) -> Flask:
         cfg.llm.category_suggestion_enabled = bool(category_suggestion_enabled)
         cfg.llm.auto_create_suggested_categories = bool(auto_create_suggested_categories)
         cfg.llm.auto_create_min_confidence = round(auto_create_min_confidence, 3)
+        cfg.llm.retry_on_failure_enabled = bool(llm_retry_on_failure_enabled)
+        cfg.llm.retry_profile = llm_retry_profile
+        cfg.llm.retry_command_template = retry_llm_command
         cfg.rules.per_type_min_confidence = per_type_clean
         cfg.rules.keyword_overrides = keyword_overrides_clean
         cfg.rules.negative_type_keywords = negative_keywords_clean
@@ -2331,6 +2700,208 @@ def create_app(cfg: AppConfig, config_path: Path) -> Flask:
 
         return _redirect_index_with_context("AI/OCR tuning updated", next_query)
 
+    @app.post("/setup/llm-rule/approve")
+    def setup_llm_rule_approve():
+        next_query = request.form.get("next", "").strip()
+        phrase = _normalize_rule_phrase(request.form.get("phrase", ""))
+        target = str(request.form.get("target", "")).strip().lower()
+
+        if not phrase or not _is_high_signal_override_phrase(phrase):
+            return _redirect_index_with_context("Rule phrase is not specific enough to auto-approve", next_query)
+        if target not in cfg.rules.allowed_doc_types or target == cfg.rules.unknown_doc_type:
+            return _redirect_index_with_context("Rule target must be an existing category", next_query)
+
+        raw = _load_raw_config(config_path)
+        rules = raw.setdefault("rules", {})
+        overrides_raw = rules.setdefault("keyword_overrides", {})
+        if not isinstance(overrides_raw, dict):
+            overrides_raw = {}
+            rules["keyword_overrides"] = overrides_raw
+        overrides_raw[phrase] = target
+        _save_raw_config(config_path, raw)
+
+        cfg.rules.keyword_overrides = {
+            str(k).strip().lower(): str(v).strip().lower()
+            for k, v in overrides_raw.items()
+            if str(k).strip() and str(v).strip()
+        }
+
+        feedback = _load_llm_rule_feedback(cfg)
+        pair = _rule_pair_key(phrase, target)
+        rejected = feedback.get("rejected_pairs", []) if isinstance(feedback.get("rejected_pairs"), list) else []
+        feedback["rejected_pairs"] = [str(x).strip().lower() for x in rejected if str(x).strip().lower() != pair]
+        _save_llm_rule_feedback(cfg, feedback)
+
+        return _redirect_index_with_context(f"Approved keyword rule: {phrase} => {target}", next_query)
+
+    @app.post("/setup/llm-rule/reject")
+    def setup_llm_rule_reject():
+        next_query = request.form.get("next", "").strip()
+        phrase = _normalize_rule_phrase(request.form.get("phrase", ""))
+        target = str(request.form.get("target", "")).strip().lower()
+
+        if not phrase or not target:
+            return _redirect_index_with_context("Missing phrase/target for rejection", next_query)
+
+        pair = _rule_pair_key(phrase, target)
+        feedback = _load_llm_rule_feedback(cfg)
+        rejected = feedback.get("rejected_pairs", []) if isinstance(feedback.get("rejected_pairs"), list) else []
+        rejected.append(pair)
+        feedback["rejected_pairs"] = rejected
+        _save_llm_rule_feedback(cfg, feedback)
+
+        return _redirect_index_with_context(f"Rejected suggested rule: {phrase} => {target}", next_query)
+
+    @app.post("/setup/llm-rule/approve-bulk")
+    def setup_llm_rule_approve_bulk():
+        next_query = request.form.get("next", "").strip()
+        pair_rows = request.form.getlist("pairs")
+        if not pair_rows:
+            return _redirect_index_with_context("No suggested rules selected", next_query)
+
+        raw = _load_raw_config(config_path)
+        rules = raw.setdefault("rules", {})
+        overrides_raw = rules.setdefault("keyword_overrides", {})
+        if not isinstance(overrides_raw, dict):
+            overrides_raw = {}
+            rules["keyword_overrides"] = overrides_raw
+
+        feedback = _load_llm_rule_feedback(cfg)
+        rejected = feedback.get("rejected_pairs", []) if isinstance(feedback.get("rejected_pairs"), list) else []
+        rejected_set = {str(x).strip().lower() for x in rejected if str(x).strip()}
+
+        approved = 0
+        skipped = 0
+        for raw_pair in pair_rows:
+            phrase_raw, target_raw = _split_rule_pair_key(str(raw_pair))
+            phrase = _normalize_rule_phrase(phrase_raw)
+            target = str(target_raw).strip().lower()
+            if not phrase or not _is_high_signal_override_phrase(phrase):
+                skipped += 1
+                continue
+            if target not in cfg.rules.allowed_doc_types or target == cfg.rules.unknown_doc_type:
+                skipped += 1
+                continue
+            overrides_raw[phrase] = target
+            rejected_set.discard(_rule_pair_key(phrase, target))
+            approved += 1
+
+        _save_raw_config(config_path, raw)
+        cfg.rules.keyword_overrides = {
+            str(k).strip().lower(): str(v).strip().lower()
+            for k, v in overrides_raw.items()
+            if str(k).strip() and str(v).strip()
+        }
+
+        feedback["rejected_pairs"] = sorted(rejected_set)
+        _save_llm_rule_feedback(cfg, feedback)
+
+        if approved:
+            msg = f"Approved {approved} keyword rule(s)"
+            if skipped:
+                msg += f" ({skipped} skipped)"
+            return _redirect_index_with_context(msg, next_query)
+        return _redirect_index_with_context("No selected rules were valid for approval", next_query)
+
+    @app.post("/setup/llm-rule/reject-bulk")
+    def setup_llm_rule_reject_bulk():
+        next_query = request.form.get("next", "").strip()
+        pair_rows = request.form.getlist("pairs")
+        if not pair_rows:
+            return _redirect_index_with_context("No suggested rules selected", next_query)
+
+        feedback = _load_llm_rule_feedback(cfg)
+        rejected = feedback.get("rejected_pairs", []) if isinstance(feedback.get("rejected_pairs"), list) else []
+        rejected_set = {str(x).strip().lower() for x in rejected if str(x).strip()}
+
+        added = 0
+        skipped = 0
+        for raw_pair in pair_rows:
+            phrase_raw, target_raw = _split_rule_pair_key(str(raw_pair))
+            phrase = _normalize_rule_phrase(phrase_raw)
+            target = str(target_raw).strip().lower()
+            if not phrase or not target:
+                skipped += 1
+                continue
+            pair = _rule_pair_key(phrase, target)
+            if pair in rejected_set:
+                skipped += 1
+                continue
+            rejected_set.add(pair)
+            added += 1
+
+        feedback["rejected_pairs"] = sorted(rejected_set)
+        _save_llm_rule_feedback(cfg, feedback)
+
+        if added:
+            msg = f"Rejected {added} suggested rule(s)"
+            if skipped:
+                msg += f" ({skipped} skipped)"
+            return _redirect_index_with_context(msg, next_query)
+        return _redirect_index_with_context("No selected rules were added to rejected list", next_query)
+
+    @app.post("/setup/llm-rule/unreject")
+    def setup_llm_rule_unreject():
+        next_query = request.form.get("next", "").strip()
+        pair = str(request.form.get("pair", "")).strip().lower()
+        if not pair:
+            return _redirect_index_with_context("No rejected rule selected", next_query)
+
+        feedback = _load_llm_rule_feedback(cfg)
+        rejected = feedback.get("rejected_pairs", []) if isinstance(feedback.get("rejected_pairs"), list) else []
+        feedback["rejected_pairs"] = [str(x).strip().lower() for x in rejected if str(x).strip().lower() != pair]
+        _save_llm_rule_feedback(cfg, feedback)
+        return _redirect_index_with_context("Removed rejection marker for suggested rule", next_query)
+
+    @app.post("/setup/llm-rule/delete")
+    def setup_llm_rule_delete():
+        next_query = request.form.get("next", "").strip()
+        phrase = _normalize_rule_phrase(request.form.get("phrase", ""))
+        if not phrase:
+            return _redirect_index_with_context("No rule phrase selected", next_query)
+
+        raw = _load_raw_config(config_path)
+        rules = raw.setdefault("rules", {})
+        overrides_raw = rules.setdefault("keyword_overrides", {})
+        if not isinstance(overrides_raw, dict):
+            overrides_raw = {}
+            rules["keyword_overrides"] = overrides_raw
+
+        removed = False
+        if phrase in overrides_raw:
+            del overrides_raw[phrase]
+            removed = True
+        else:
+            for k in list(overrides_raw.keys()):
+                if _normalize_rule_phrase(str(k)) == phrase:
+                    del overrides_raw[k]
+                    removed = True
+
+        _save_raw_config(config_path, raw)
+        cfg.rules.keyword_overrides = {
+            str(k).strip().lower(): str(v).strip().lower()
+            for k, v in overrides_raw.items()
+            if str(k).strip() and str(v).strip()
+        }
+
+        if removed:
+            return _redirect_index_with_context(f"Deleted keyword rule: {phrase}", next_query)
+        return _redirect_index_with_context(f"Rule not found: {phrase}", next_query)
+
+    @app.post("/setup/llm-rule/clear-all")
+    def setup_llm_rule_clear_all():
+        next_query = request.form.get("next", "").strip()
+
+        raw = _load_raw_config(config_path)
+        rules = raw.setdefault("rules", {})
+        rules["keyword_overrides"] = {}
+        _save_raw_config(config_path, raw)
+
+        cfg.rules.keyword_overrides = {}
+        _save_llm_rule_feedback(cfg, {"rejected_pairs": []})
+
+        return _redirect_index_with_context("Cleared all keyword override rules and rejected-rule memory", next_query)
+
     @app.post("/setup/runtime")
     def setup_runtime():
         next_query = request.form.get("next", "").strip()
@@ -2345,10 +2916,14 @@ def create_app(cfg: AppConfig, config_path: Path) -> Flask:
         llm_max_input_raw = request.form.get("llm_max_input_chars", "").strip() or str(cfg.llm.max_input_chars)
         llm_profile = request.form.get("llm_profile", "").strip().lower() or "custom"
         llm_command_template = request.form.get("llm_command_template", "").strip()
+        llm_retry_on_failure_enabled = request.form.get("llm_retry_on_failure_enabled", "off") == "on"
+        llm_retry_profile = request.form.get("llm_retry_profile", "").strip().lower() or "deep"
         ocr_enabled = request.form.get("ocr_enabled", "off") == "on"
 
         if llm_profile not in LLM_PROFILE_CHOICES:
             return _redirect_index_with_context("LLM profile must be fast, balanced, deep, ultra, or custom", next_query)
+        if llm_retry_profile not in LLM_RETRY_PROFILE_CHOICES:
+            return _redirect_index_with_context("Retry profile must be same, fast, balanced, deep, or ultra", next_query)
 
         effective_llm_command = llm_command_template
         if llm_profile != "custom":
@@ -2357,6 +2932,13 @@ def create_app(cfg: AppConfig, config_path: Path) -> Flask:
                 llm_command_template or cfg.llm.command_template,
                 cfg.rules.allowed_doc_types,
             )
+
+        retry_base_command = effective_llm_command or cfg.llm.command_template
+        retry_llm_command = (
+            retry_base_command
+            if llm_retry_profile == "same"
+            else _build_llm_profile_command(llm_retry_profile, retry_base_command, cfg.rules.allowed_doc_types)
+        )
 
         try:
             poll_seconds = int(poll_seconds_raw)
@@ -2397,6 +2979,9 @@ def create_app(cfg: AppConfig, config_path: Path) -> Flask:
         raw["llm"]["max_input_chars"] = llm_max_input_chars
         raw["llm"]["profile"] = llm_profile
         raw["llm"]["command_template"] = effective_llm_command
+        raw["llm"]["retry_on_failure_enabled"] = bool(llm_retry_on_failure_enabled)
+        raw["llm"]["retry_profile"] = llm_retry_profile
+        raw["llm"]["retry_command_template"] = retry_llm_command
         raw.setdefault("ocr", {})
         raw["ocr"]["enabled"] = bool(ocr_enabled)
         _save_raw_config(config_path, raw)
@@ -2411,9 +2996,47 @@ def create_app(cfg: AppConfig, config_path: Path) -> Flask:
         cfg.llm.timeout_seconds = llm_timeout_seconds
         cfg.llm.max_input_chars = llm_max_input_chars
         cfg.llm.command_template = effective_llm_command
+        cfg.llm.retry_on_failure_enabled = bool(llm_retry_on_failure_enabled)
+        cfg.llm.retry_profile = llm_retry_profile
+        cfg.llm.retry_command_template = retry_llm_command
         cfg.ocr.enabled = bool(ocr_enabled)
 
         return _redirect_index_with_context("Runtime/engine settings updated", next_query)
+
+    @app.post("/setup/bolt-on")
+    def setup_bolt_on():
+        next_query = request.form.get("next", "").strip()
+        enabled = request.form.get("email_intake_enabled", "off") == "on"
+
+        raw = _load_email_intake_config()
+        if not raw:
+            example = _email_intake_example_config_path()
+            if example.exists():
+                try:
+                    with example.open("r", encoding="utf-8") as f:
+                        maybe = yaml.safe_load(f) or {}
+                    if isinstance(maybe, dict):
+                        raw = maybe
+                except Exception:
+                    raw = {}
+        if not raw:
+            raw = {"enabled": False, "web_ui": {"enabled": True, "host": "0.0.0.0", "port": 8091}}
+
+        raw["enabled"] = bool(enabled)
+        web_ui = raw.get("web_ui", {}) if isinstance(raw.get("web_ui"), dict) else {}
+        web_ui.setdefault("enabled", True)
+        web_ui.setdefault("host", "0.0.0.0")
+        web_ui.setdefault("port", 8091)
+        raw["web_ui"] = web_ui
+        _save_email_intake_config(raw)
+
+        state = "enabled" if enabled else "disabled"
+        if enabled:
+            return _redirect_index_with_context(
+                f"Email intake bolt-on {state}. UI: {_email_intake_ui_url(raw, request.host)}",
+                next_query,
+            )
+        return _redirect_index_with_context(f"Email intake bolt-on {state}", next_query)
 
     @app.get("/api/user-inboxes")
     def api_user_inboxes():

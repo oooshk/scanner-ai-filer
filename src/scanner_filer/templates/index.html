@@ -19,6 +19,11 @@
           {% if setup_enabled %}
           <button type="button" id="open-setup" class="setup-launch">&#9881; Setup</button>
           {% endif %}
+          {% if setup_defaults.email_intake_enabled %}
+          <form method="get" action="{{ setup_defaults.email_intake_ui_url }}" target="_blank" class="inline-form-bare">
+            <button type="submit" class="setup-launch">&#9993; Email Intake</button>
+          </form>
+          {% endif %}
           <form method="post" action="/logout" class="inline-form-bare">
             <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
             <button type="submit">Log Out</button>
@@ -295,6 +300,8 @@
         <input type="hidden" name="bucket" id="bucket-hidden" value="{{ bucket }}">
         <input type="hidden" name="sort_by" id="sort-by-hidden" value="{{ sort_by }}">
         <input type="hidden" name="sort_dir" id="sort-dir-hidden" value="{{ sort_dir }}">
+        <input type="hidden" name="page" id="page-hidden" value="{{ current_page }}">
+        <input type="hidden" name="page_size" id="page-size-hidden" value="{{ page_size }}">
         <button type="submit">Search</button>
       </form>
     </section>
@@ -538,6 +545,24 @@
         </details>
 
         <details class="setup-block">
+          <summary>Email Bolt-On</summary>
+          <p class="muted">Enable or disable the optional email intake bolt-on module and open its configuration UI.</p>
+          <form method="post" action="/setup/bolt-on" class="setup-form">
+            <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+            <input type="hidden" name="next" value="{{ return_query }}">
+            <label class="checkline"><input type="checkbox" name="email_intake_enabled" {% if setup_defaults.email_intake_enabled %}checked{% endif %}> Enable email intake bolt-on</label>
+            <button type="submit">Save Bolt-On Setting</button>
+          </form>
+          {% if setup_defaults.email_intake_enabled %}
+          <p class="muted" style="margin-top:0.6rem;">Bolt-on is enabled.
+            <a href="{{ setup_defaults.email_intake_ui_url }}" target="_blank" rel="noopener">Open Email Intake Configuration</a>
+          </p>
+          {% else %}
+          <p class="muted" style="margin-top:0.6rem;">Bolt-on is currently disabled.</p>
+          {% endif %}
+        </details>
+
+        <details class="setup-block">
           <summary>Runtime &amp; Engine</summary>
           <p class="muted">Tune watcher timing, stability checks, and model runtime controls.</p>
           <div class="llm-health-card" id="llm-json-health" data-metrics-available="{{ 1 if setup_defaults.llm_json_metrics_available else 0 }}">
@@ -574,6 +599,7 @@
             <input type="number" min="1" max="10" step="1" name="stable_cycles_required" value="{{ setup_defaults.stable_cycles_required }}" placeholder="Stable cycles required">
             <label class="checkline"><input type="checkbox" name="ocr_enabled" {% if setup_defaults.ocr_enabled %}checked{% endif %}> Enable OCR engine</label>
             <label class="checkline"><input type="checkbox" name="llm_enabled" {% if setup_defaults.llm_enabled %}checked{% endif %}> Enable LLM classifier</label>
+            <label class="checkline"><input type="checkbox" name="llm_retry_on_failure_enabled" {% if setup_defaults.llm_retry_on_failure_enabled %}checked{% endif %}> Retry weak/failed classifications with a second LLM pass</label>
             <input type="number" min="30" max="1200" step="5" name="llm_timeout_seconds" value="{{ setup_defaults.llm_timeout_seconds }}" placeholder="LLM timeout (seconds)">
             <input type="number" min="600" max="20000" step="100" name="llm_max_input_chars" value="{{ setup_defaults.llm_max_input_chars }}" placeholder="LLM max input chars">
             <select name="llm_profile">
@@ -582,6 +608,13 @@
               <option value="deep" {% if setup_defaults.llm_profile == 'deep' %}selected{% endif %}>LLM Profile: Deep (larger model, slowest/smartest)</option>
               <option value="ultra" {% if setup_defaults.llm_profile == 'ultra' %}selected{% endif %}>LLM Profile: Ultra (16B-class instruct, scenario-tuned)</option>
               <option value="custom" {% if setup_defaults.llm_profile == 'custom' %}selected{% endif %}>LLM Profile: Custom command</option>
+            </select>
+            <select name="llm_retry_profile">
+              <option value="same" {% if setup_defaults.llm_retry_profile == 'same' %}selected{% endif %}>Retry profile: Same as primary</option>
+              <option value="fast" {% if setup_defaults.llm_retry_profile == 'fast' %}selected{% endif %}>Retry profile: Fast</option>
+              <option value="balanced" {% if setup_defaults.llm_retry_profile == 'balanced' %}selected{% endif %}>Retry profile: Balanced</option>
+              <option value="deep" {% if setup_defaults.llm_retry_profile == 'deep' %}selected{% endif %}>Retry profile: Deep</option>
+              <option value="ultra" {% if setup_defaults.llm_retry_profile == 'ultra' %}selected{% endif %}>Retry profile: Ultra</option>
             </select>
             <textarea name="llm_command_template" rows="3" placeholder="LLM command template">{{ setup_defaults.llm_command_template }}</textarea>
             <div class="field-hint" style="grid-column: 1 / -1; white-space: normal; min-height: 0;">Current model hint: {{ setup_defaults.llm_model_hint or 'not detected' }}. Choose Fast/Balanced/Deep to auto-generate a command, or Custom to use your own command template.</div>
@@ -619,6 +652,14 @@
             <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
             <input type="hidden" name="next" value="{{ return_query }}">
             <input type="number" min="0" max="1" step="0.01" name="min_confidence_autofile" value="{{ setup_defaults.ai_confidence }}" placeholder="Auto-file confidence threshold 0..1">
+            <label class="checkline"><input type="checkbox" name="llm_retry_on_failure_enabled" {% if setup_defaults.llm_retry_on_failure_enabled %}checked{% endif %}> Enable automatic second-pass LLM retry for weak/failed first pass</label>
+            <select name="llm_retry_profile">
+              <option value="same" {% if setup_defaults.llm_retry_profile == 'same' %}selected{% endif %}>Second-pass profile: Same as primary</option>
+              <option value="fast" {% if setup_defaults.llm_retry_profile == 'fast' %}selected{% endif %}>Second-pass profile: Fast</option>
+              <option value="balanced" {% if setup_defaults.llm_retry_profile == 'balanced' %}selected{% endif %}>Second-pass profile: Balanced</option>
+              <option value="deep" {% if setup_defaults.llm_retry_profile == 'deep' %}selected{% endif %}>Second-pass profile: Deep</option>
+              <option value="ultra" {% if setup_defaults.llm_retry_profile == 'ultra' %}selected{% endif %}>Second-pass profile: Ultra</option>
+            </select>
             <textarea name="classification_descriptor" rows="4" placeholder="LLM role/mission descriptor (what the classifier must do first)">{{ setup_defaults.ai_descriptor }}</textarea>
             <textarea name="classification_guidance" rows="5" placeholder="Optional custom guidance for classifier">{{ setup_defaults.ai_guidance }}</textarea>
             <label class="checkline"><input type="checkbox" name="category_suggestion_enabled" {% if setup_defaults.ai_category_suggestion_enabled %}checked{% endif %}> Allow LLM to suggest new categories when no existing type fits</label>
@@ -643,6 +684,151 @@
             <textarea name="public_acronym_overrides" rows="4" placeholder='JSON acronym->type, e.g. {"acronym_name":"pension"}'>{{ setup_defaults.public_acronym_overrides }}</textarea>
             <button type="submit">Save AI Tuning</button>
           </form>
+
+          <h3 class="setup-section-heading" style="margin:14px 0 6px;">Keyword Rule Review</h3>
+          <div class="setup-subblock" style="margin-top:12px;">
+            <h4>LLM Rule Suggestions (Existing Categories)</h4>
+            <p class="muted">These suggestions are derived from review documents where AI had a strong category hint. Approve to add to keyword overrides, reject to suppress, or delete existing rules below.</p>
+            {% if llm_rule_candidates %}
+            <form method="post" action="/setup/llm-rule/approve-bulk" class="setup-form" style="grid-template-columns: 1fr auto auto; gap:6px; margin-bottom:8px;" id="llm-rule-bulk-form">
+              <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+              <input type="hidden" name="next" value="{{ return_query }}">
+              <label class="checkline"><input type="checkbox" id="llm-rule-select-all"> Select all suggestions</label>
+              <button type="submit">Approve Selected</button>
+              <button type="submit" formaction="/setup/llm-rule/reject-bulk" class="danger">Reject Selected</button>
+            </form>
+            <table class="setup-mini-table">
+              <thead>
+                <tr>
+                  <th>Select</th>
+                  <th>Phrase</th>
+                  <th>Category</th>
+                  <th>Evidence</th>
+                  <th>Max Confidence</th>
+                  <th>Example</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for c in llm_rule_candidates %}
+                <tr>
+                  <td>
+                    <input type="checkbox" name="pairs" value="{{ c.phrase }}=>{{ c.target }}" form="llm-rule-bulk-form" class="llm-rule-select-item">
+                  </td>
+                  <td><code>{{ c.phrase }}</code></td>
+                  <td>{{ c.target }}</td>
+                  <td>{{ c.count }}</td>
+                  <td>{{ '%.2f'|format(c.max_conf) }}</td>
+                  <td class="path" title="{{ c.example_rel_path }}">{{ c.example_rel_path }}</td>
+                  <td>
+                    <div class="row">
+                      <form method="post" action="/setup/llm-rule/approve" class="inline-form-bare">
+                        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+                        <input type="hidden" name="next" value="{{ return_query }}">
+                        <input type="hidden" name="phrase" value="{{ c.phrase }}">
+                        <input type="hidden" name="target" value="{{ c.target }}">
+                        <button type="submit">Approve</button>
+                      </form>
+                      <form method="post" action="/setup/llm-rule/reject" class="inline-form-bare">
+                        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+                        <input type="hidden" name="next" value="{{ return_query }}">
+                        <input type="hidden" name="phrase" value="{{ c.phrase }}">
+                        <input type="hidden" name="target" value="{{ c.target }}">
+                        <button type="submit" class="danger">Reject</button>
+                      </form>
+                    </div>
+                  </td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+            <script>
+              (function() {
+                const selectAll = document.getElementById('llm-rule-select-all');
+                if (!selectAll) return;
+                const items = Array.from(document.querySelectorAll('.llm-rule-select-item'));
+                selectAll.addEventListener('change', () => {
+                  items.forEach((cb) => {
+                    cb.checked = selectAll.checked;
+                  });
+                });
+              })();
+            </script>
+            {% else %}
+            <p class="muted">No pending LLM rule suggestions right now.</p>
+            {% endif %}
+          </div>
+
+          <div class="setup-subblock" style="margin-top:12px;">
+            <h4>Rejected Suggestions</h4>
+            {% if llm_rule_rejected %}
+            <table class="setup-mini-table">
+              <thead>
+                <tr>
+                  <th>Phrase</th>
+                  <th>Category</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for r in llm_rule_rejected %}
+                <tr>
+                  <td><code>{{ r.phrase }}</code></td>
+                  <td>{{ r.target }}</td>
+                  <td>
+                    <form method="post" action="/setup/llm-rule/unreject" class="inline-form-bare">
+                      <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+                      <input type="hidden" name="next" value="{{ return_query }}">
+                      <input type="hidden" name="pair" value="{{ r.pair }}">
+                      <button type="submit">Allow Again</button>
+                    </form>
+                  </td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+            {% else %}
+            <p class="muted">No rejected suggestions saved.</p>
+            {% endif %}
+          </div>
+
+          <div class="setup-subblock" style="margin-top:12px;">
+            <h4>Current Keyword Rules</h4>
+            <form method="post" action="/setup/llm-rule/clear-all" class="inline-form-bare" onsubmit="return confirm('Clear ALL keyword override rules and start fresh?');" style="margin-bottom:8px;">
+              <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+              <input type="hidden" name="next" value="{{ return_query }}">
+              <button type="submit" class="danger">Clear All Keyword Rules</button>
+            </form>
+            {% if keyword_override_rows %}
+            <table class="setup-mini-table">
+              <thead>
+                <tr>
+                  <th>Phrase</th>
+                  <th>Category</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for phrase, target in keyword_override_rows %}
+                <tr>
+                  <td><code>{{ phrase }}</code></td>
+                  <td>{{ target }}</td>
+                  <td>
+                    <form method="post" action="/setup/llm-rule/delete" class="inline-form-bare" onsubmit="return confirm('Delete keyword rule {{ phrase }} => {{ target }}?');">
+                      <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+                      <input type="hidden" name="next" value="{{ return_query }}">
+                      <input type="hidden" name="phrase" value="{{ phrase }}">
+                      <button type="submit" class="danger">Delete</button>
+                    </form>
+                  </td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+            {% else %}
+            <p class="muted">No keyword override rules are configured.</p>
+            {% endif %}
+          </div>
         </details>
       </section>
     </div>
@@ -740,6 +926,15 @@
             <button type="button" id="files-collapse" class="tree-toggle-btn">Collapse File List</button>
             <button type="button" id="docs-expand-all" class="tree-toggle-btn">Expand All Details</button>
             <button type="button" id="docs-collapse-all" class="tree-toggle-btn">Collapse All Details</button>
+            <label class="refresh-control">View refresh
+              <select id="view-refresh-interval">
+                <option value="0">off</option>
+                <option value="5000">5s</option>
+                <option value="10000" selected>10s</option>
+                <option value="20000">20s</option>
+                <option value="30000">30s</option>
+              </select>
+            </label>
           </div>
         </div>
         <div class="bulk-move-controls">
@@ -758,6 +953,13 @@
             <small class="muted" id="bulk-selected-count">0 selected</small>
           </div>
           <div class="bulk-controls-right">
+            <div class="docs-count muted">Showing {{ page_start_index }}-{{ page_end_index }} of {{ total_docs }}</div>
+            <select id="docs-page-size">
+              <option value="25" {% if page_size == 25 %}selected{% endif %}>Show 25</option>
+              <option value="50" {% if page_size == 50 %}selected{% endif %}>Show 50</option>
+              <option value="100" {% if page_size == 100 %}selected{% endif %}>Show 100</option>
+              <option value="200" {% if page_size == 200 %}selected{% endif %}>Show 200</option>
+            </select>
             <select id="docs-sort-by">
               <option value="received" {% if sort_by == 'received' %}selected{% endif %}>Sort: Time Received</option>
               <option value="processed" {% if sort_by == 'processed' %}selected{% endif %}>Sort: Last Processed</option>
@@ -774,13 +976,40 @@
             </select>
           </div>
         </div>
+      {% if total_pages > 1 %}
+      <nav class="pagination" aria-label="Document pages">
+        {% if current_page > 1 %}
+        <a class="page-btn" href="{{ url_for('index', q=q, bucket=bucket, sort_by=sort_by, sort_dir=sort_dir, page=current_page-1, page_size=page_size) }}">Previous</a>
+        {% else %}
+        <span class="page-btn disabled">Previous</span>
+        {% endif %}
+
+        {% for p in range(1, total_pages + 1) %}
+          {% if p == 1 or p == total_pages or (p >= current_page - 2 and p <= current_page + 2) %}
+            {% if p == current_page %}
+            <span class="page-btn active">{{ p }}</span>
+            {% else %}
+            <a class="page-btn" href="{{ url_for('index', q=q, bucket=bucket, sort_by=sort_by, sort_dir=sort_dir, page=p, page_size=page_size) }}">{{ p }}</a>
+            {% endif %}
+          {% elif p == current_page - 3 or p == current_page + 3 %}
+            <span class="page-ellipsis">...</span>
+          {% endif %}
+        {% endfor %}
+
+        {% if current_page < total_pages %}
+        <a class="page-btn" href="{{ url_for('index', q=q, bucket=bucket, sort_by=sort_by, sort_dir=sort_dir, page=current_page+1, page_size=page_size) }}">Next</a>
+        {% else %}
+        <span class="page-btn disabled">Next</span>
+        {% endif %}
+      </nav>
+      {% endif %}
       <div id="documents-table-wrap">
       <table>
         <thead>
           <tr>
             <th>Select</th>
             <th>Status</th>
-            <th>File</th>
+            <th>Open</th>
             <th>Type</th>
             <th>Scanned</th>
             <th>Modified</th>
@@ -798,6 +1027,11 @@
               {% if d.ai_decision_confidence is not none %}
               <span class="chip chip-confidence" style="--confidence: {{ '%.3f'|format(d.ai_decision_confidence) }};" title="AI confidence {{ '%.1f'|format(d.ai_decision_confidence) }}">{{ '%.1f'|format(d.ai_decision_confidence) }}</span>
               {% endif %}
+              {% if d.ai_retry_state == 'used' %}
+              <span class="chip chip-retry-pass" title="Second-pass LLM retry was used and replaced the first-pass result">2nd pass used</span>
+              {% elif d.ai_retry_state == 'checked' %}
+              <span class="chip chip-retry-pass" title="Second-pass LLM retry was attempted, but first-pass result was kept">2nd pass checked</span>
+              {% endif %}
               {% if d.inbox_user %}
               <span class="chip chip-inbox" title="Currently in {{ d.inbox_user }} inbox">{{ d.inbox_user }}</span>
               {% endif %}
@@ -805,7 +1039,7 @@
               <span class="chip chip-autofile" title="Auto-filed at {{ d.auto_filed_iso }}">auto-filed</span>
               {% endif %}
             </td>
-            <td class="doc-filename-cell"><span class="doc-name">{{ d.filename }}</span> <a class="doc-open-link" href="{{ url_for('open_document', bucket=d.bucket, rel_path=d.rel_path) }}" target="_blank" rel="noopener" title="Open {{ d.rel_path }}">Open</a></td>
+            <td class="doc-filename-cell"><a class="chip chip-open" href="{{ url_for('open_document', bucket=d.bucket, rel_path=d.rel_path) }}" target="_blank" rel="noopener" title="Open {{ d.rel_path }}" onclick="event.stopPropagation();">Open</a></td>
             <td>
               <div class="doc-type-cell">
                 <span>{{ d.doc_type }}</span>
@@ -818,12 +1052,25 @@
           <tr class="doc-detail-row" id="detail-{{ loop.index0 }}" hidden>
             <td colspan="7">
               <div class="detail-grid">
+                <div><strong>Filename:</strong> {{ d.filename }}</div>
                 <div><strong>Sender:</strong> {{ d.sender or 'unknown' }}</div>
                 <div><strong>Year:</strong> {{ d.year or '-' }}</div>
                 <div><strong>Size:</strong> {{ (d.size_bytes / 1024)|round(1) }} KB</div>
                 <div><strong>Suggested:</strong> {% if d.suggested_type %}{{ d.suggested_type }}{% elif d.doc_type and d.doc_type != 'unknown' %}already {{ d.doc_type }}{% else %}-{% endif %}</div>
               </div>
-              {% if d.ai_suggested_type %}
+              {% if d.ai_suggested_type and d.ai_suggested_type in allowed_types and d.bucket in ['review', 'rejected'] %}
+              <form method="post" action="/move" class="inline-form-bare" style="margin: 0 0 10px;">
+                <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+                <input type="hidden" name="src_bucket" value="{{ d.bucket }}">
+                <input type="hidden" name="rel_path" value="{{ d.rel_path }}">
+                <input type="hidden" name="next" value="{{ return_query }}">
+                <input type="hidden" name="target_bucket" value="archive">
+                <input type="hidden" name="target_type" value="{{ d.ai_suggested_type }}">
+                <input type="hidden" name="target_year" value="{{ d.target_default_year }}">
+                <input type="hidden" name="target_sender" value="{{ d.sender if d.sender and d.sender != 'unknown' else '' }}">
+                <button type="submit" class="detail-ai-suggestion detail-ai-suggestion-action" title="Apply AI suggestion and file to archive as {{ d.ai_suggested_type }}">AI suggests <strong>{{ d.ai_suggested_type }}</strong>{% if d.ai_suggested_confidence > 0 %} ({{ (d.ai_suggested_confidence * 100)|round(0)|int }}% confidence){% endif %}</button>
+              </form>
+              {% elif d.ai_suggested_type %}
               <div class="detail-ai-suggestion">AI suggests <strong>{{ d.ai_suggested_type }}</strong>{% if d.ai_suggested_confidence > 0 %} ({{ (d.ai_suggested_confidence * 100)|round(0)|int }}% confidence){% endif %}</div>
               {% endif %}
               <div class="detail-long"><strong>Full path:</strong> {{ d.rel_path }}</div>
@@ -904,14 +1151,37 @@
         </tbody>
       </table>
       </div>
+      {% if total_pages > 1 %}
+      <nav class="pagination pagination-bottom" aria-label="Document pages">
+        {% if current_page > 1 %}
+        <a class="page-btn" href="{{ url_for('index', q=q, bucket=bucket, sort_by=sort_by, sort_dir=sort_dir, page=current_page-1, page_size=page_size) }}">Previous</a>
+        {% else %}
+        <span class="page-btn disabled">Previous</span>
+        {% endif %}
+        <span class="page-summary">Page {{ current_page }} of {{ total_pages }}</span>
+        {% if current_page < total_pages %}
+        <a class="page-btn" href="{{ url_for('index', q=q, bucket=bucket, sort_by=sort_by, sort_dir=sort_dir, page=current_page+1, page_size=page_size) }}">Next</a>
+        {% else %}
+        <span class="page-btn disabled">Next</span>
+        {% endif %}
+      </nav>
+      {% endif %}
     </section>
   </main>
 
+  <div id="doc-open-preview" class="doc-open-preview" hidden>
+    <div class="doc-open-preview-head">Preview</div>
+    <iframe id="doc-open-preview-frame" title="Document preview" loading="lazy"></iframe>
+  </div>
+
   <script>
+    const requestedFocusRel = {{ focus_rel|tojson }};
     let autoRefreshTimer = null;
+    let docsTreeRefreshTimer = null;
     let queueWasActive = false;
     const docsUiStateKey = 'docs_ui_state_v1';
     const queueUiStateKey = 'queue_ui_state_v1';
+    const viewRefreshMsKey = 'docs_tree_refresh_ms_v1';
     const queueDefaultCompactRows = 3;
     let queueMode = 'compact';
     let queueStats = {
@@ -1170,7 +1440,43 @@
         }
         refreshQueueOnly();
         refreshLlmJsonHealthOnly();
-      }, 5000);
+      }, 3000);
+    }
+
+    function canAutoReloadView() {
+      if (userIsEditing()) return false;
+      if (hasExpandedRows()) return false;
+      const setupModal = document.getElementById('setup-modal');
+      const helpModal = document.getElementById('help-modal');
+      if (setupModal && !setupModal.hidden) return false;
+      if (helpModal && !helpModal.hidden) return false;
+      return true;
+    }
+
+    function scheduleDocsTreeRefresh() {
+      if (docsTreeRefreshTimer) {
+        clearInterval(docsTreeRefreshTimer);
+        docsTreeRefreshTimer = null;
+      }
+      let ms = 10000;
+      try {
+        const raw = sessionStorage.getItem(viewRefreshMsKey);
+        const parsed = raw ? Number(raw) : 10000;
+        if ([0, 5000, 10000, 20000, 30000].includes(parsed)) {
+          ms = parsed;
+        }
+      } catch (_err) {
+      }
+      const control = document.getElementById('view-refresh-interval');
+      if (control) {
+        control.value = String(ms);
+      }
+      if (ms <= 0) return;
+      docsTreeRefreshTimer = setInterval(() => {
+        if (!canAutoReloadView()) return;
+        saveDocsUiState();
+        window.location.reload();
+      }, ms);
     }
 
     loadQueueUiState();
@@ -1185,25 +1491,38 @@
     }
 
     scheduleAutoRefresh();
+    scheduleDocsTreeRefresh();
     refreshQueueOnly();
     refreshLlmJsonHealthOnly();
 
     const searchForm = document.getElementById('search-form');
     const sortByHidden = document.getElementById('sort-by-hidden');
     const sortDirHidden = document.getElementById('sort-dir-hidden');
+    const pageHidden = document.getElementById('page-hidden');
+    const pageSizeHidden = document.getElementById('page-size-hidden');
     const docsSortBy = document.getElementById('docs-sort-by');
     const docsSortDir = document.getElementById('docs-sort-dir');
+    const docsPageSize = document.getElementById('docs-page-size');
 
     function submitSearchWithSort() {
       if (!searchForm || !sortByHidden || !sortDirHidden || !docsSortBy || !docsSortDir) return;
       sortByHidden.value = docsSortBy.value;
       sortDirHidden.value = docsSortDir.value;
+      if (pageHidden) {
+        pageHidden.value = '1';
+      }
+      if (pageSizeHidden && docsPageSize) {
+        pageSizeHidden.value = docsPageSize.value;
+      }
       saveDocsUiState();
       searchForm.submit();
     }
 
     if (searchForm) {
       searchForm.addEventListener('submit', () => {
+        if (pageHidden) {
+          pageHidden.value = '1';
+        }
         saveDocsUiState();
       });
     }
@@ -1213,6 +1532,20 @@
     }
     if (docsSortDir) {
       docsSortDir.addEventListener('change', submitSearchWithSort);
+    }
+    if (docsPageSize) {
+      docsPageSize.addEventListener('change', submitSearchWithSort);
+    }
+
+    const viewRefreshControl = document.getElementById('view-refresh-interval');
+    if (viewRefreshControl) {
+      viewRefreshControl.addEventListener('change', () => {
+        try {
+          sessionStorage.setItem(viewRefreshMsKey, String(viewRefreshControl.value || '10000'));
+        } catch (_err) {
+        }
+        scheduleDocsTreeRefresh();
+      });
     }
 
     function toggleRowById(_event, id) {
@@ -1231,6 +1564,93 @@
     document.querySelectorAll('.doc-row a, .doc-row button, .doc-row input, .doc-row select, .doc-row textarea, .doc-row label').forEach((el) => {
       el.addEventListener('click', (ev) => ev.stopPropagation());
     });
+
+    const previewPanel = document.getElementById('doc-open-preview');
+    const previewFrame = document.getElementById('doc-open-preview-frame');
+    let previewShowTimer = null;
+    let previewHideTimer = null;
+    let lastPreviewUrl = '';
+
+    function canShowHoverPreview() {
+      try {
+        return window.matchMedia('(hover: hover)').matches;
+      } catch (_err) {
+        return false;
+      }
+    }
+
+    function placePreviewNear(linkEl) {
+      if (!previewPanel || !linkEl) return;
+      const rect = linkEl.getBoundingClientRect();
+      const panelW = 420;
+      const panelH = 520;
+      let left = rect.right + 14;
+      let top = rect.top - 8;
+
+      if (left + panelW > window.innerWidth - 8) {
+        left = Math.max(8, rect.left - panelW - 14);
+      }
+      if (top + panelH > window.innerHeight - 8) {
+        top = Math.max(8, window.innerHeight - panelH - 8);
+      }
+
+      previewPanel.style.left = `${left}px`;
+      previewPanel.style.top = `${top}px`;
+    }
+
+    function showPreviewFor(linkEl) {
+      if (!previewPanel || !previewFrame || !linkEl || !canShowHoverPreview()) return;
+      const rawUrl = String(linkEl.getAttribute('href') || '').trim();
+      if (!rawUrl) return;
+      const previewUrl = rawUrl.includes('#') ? rawUrl : `${rawUrl}#toolbar=0&navpanes=0&scrollbar=0`;
+      if (previewUrl !== lastPreviewUrl) {
+        previewFrame.src = previewUrl;
+        lastPreviewUrl = previewUrl;
+      }
+      placePreviewNear(linkEl);
+      previewPanel.hidden = false;
+    }
+
+    function hidePreview() {
+      if (!previewPanel) return;
+      previewPanel.hidden = true;
+    }
+
+    document.querySelectorAll('.chip-open').forEach((link) => {
+      link.addEventListener('mouseenter', () => {
+        if (!canShowHoverPreview()) return;
+        if (previewHideTimer) {
+          clearTimeout(previewHideTimer);
+          previewHideTimer = null;
+        }
+        if (previewShowTimer) clearTimeout(previewShowTimer);
+        previewShowTimer = setTimeout(() => showPreviewFor(link), 220);
+      });
+
+      link.addEventListener('mouseleave', () => {
+        if (previewShowTimer) {
+          clearTimeout(previewShowTimer);
+          previewShowTimer = null;
+        }
+        if (previewHideTimer) clearTimeout(previewHideTimer);
+        previewHideTimer = setTimeout(hidePreview, 120);
+      });
+    });
+
+    if (previewPanel) {
+      previewPanel.addEventListener('mouseenter', () => {
+        if (previewHideTimer) {
+          clearTimeout(previewHideTimer);
+          previewHideTimer = null;
+        }
+      });
+      previewPanel.addEventListener('mouseleave', () => {
+        if (previewHideTimer) clearTimeout(previewHideTimer);
+        previewHideTimer = setTimeout(hidePreview, 80);
+      });
+      window.addEventListener('scroll', hidePreview, { passive: true });
+      window.addEventListener('resize', hidePreview);
+    }
 
     document.querySelectorAll('.doc-detail-row a, .doc-detail-row button, .doc-detail-row input, .doc-detail-row select, .doc-detail-row textarea, .doc-detail-row label').forEach((el) => {
       el.addEventListener('click', (ev) => ev.stopPropagation());
@@ -1457,26 +1877,49 @@
       treeFilter.addEventListener('input', applyTreeFilter);
     }
 
+    function focusDocumentRow(relPath) {
+      if (!relPath) return false;
+      const row = Array.from(document.querySelectorAll('.doc-row')).find((r) => String(r.dataset.relPath || '') === String(relPath));
+      if (!row) return false;
+      const docsWrap = document.getElementById('documents-table-wrap');
+      if (docsWrap && docsWrap.hidden) docsWrap.hidden = false;
+      const id = row.dataset.rowId;
+      if (id) {
+        const detail = document.getElementById('detail-' + id);
+        if (detail) detail.hidden = false;
+      }
+      row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      row.classList.add('doc-row-highlight');
+      setTimeout(() => row.classList.remove('doc-row-highlight'), 2000);
+      saveDocsUiState();
+      return true;
+    }
+
     document.querySelectorAll('.tree-find-doc').forEach((link) => {
       link.addEventListener('click', (e) => {
         e.preventDefault();
         e.stopPropagation();
         const relPath = link.dataset.relPath;
         if (!relPath) return;
-        const row = document.querySelector('.doc-row[data-rel-path="' + CSS.escape(relPath) + '"]');
-        if (!row) return;
-        const docsWrap = document.getElementById('documents-table-wrap');
-        if (docsWrap && docsWrap.hidden) docsWrap.hidden = false;
-        const id = row.dataset.rowId;
-        if (id) {
-          const detail = document.getElementById('detail-' + id);
-          if (detail) detail.hidden = false;
-        }
-        row.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        row.classList.add('doc-row-highlight');
-        setTimeout(() => row.classList.remove('doc-row-highlight'), 2000);
+        if (focusDocumentRow(relPath)) return;
+
+        const url = new URL(window.location.href);
+        url.searchParams.set('focus_rel', relPath);
+        url.searchParams.set('page', '1');
+        saveDocsUiState();
+        window.location.assign(url.toString());
       });
     });
+
+    if (requestedFocusRel) {
+      setTimeout(() => {
+        const focused = focusDocumentRow(requestedFocusRel);
+        if (!focused) return;
+        const cleanUrl = new URL(window.location.href);
+        cleanUrl.searchParams.delete('focus_rel');
+        window.history.replaceState({}, '', cleanUrl.toString());
+      }, 0);
+    }
 
     const setupModal = document.getElementById('setup-modal');
     const openSetupBtn = document.getElementById('open-setup');
