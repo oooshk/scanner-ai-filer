@@ -52,8 +52,10 @@ llm:
   # Number of subsequent classify calls to keep fallback command active.
   json_fallback_cooldown_calls: 10
   # llama.cpp mode: keep {prompt} exactly as-is.
-  # Option A – Ollama (recommended, no JSON schema flag needed):
+  # Option A – Ollama-compatible endpoint (recommended, no JSON schema flag needed):
   # command_template: ollama run qwen2.5:3b-instruct
+  # Option A2 – Hailo-Ollama endpoint on Hailo-10H (REST API only, so use the helper wrapper):
+  # command_template: /usr/bin/python3 /opt/scanner-filer/scripts/hailo_ollama_generate.py qwen2.5-instruct:1.5b
   #
   # Option B – llama.cpp binary:
   command_template: >-
@@ -135,3 +137,7 @@ stable_cycles_required: 2
 # 10m | 1h | 1d | 1w | forever
 auto_file_highlight_window: 1h
 log_level: INFO
+
+ui:
+  # Enable hover preview panel on Open buttons in the web UI.
+  hover_preview_enabled: true

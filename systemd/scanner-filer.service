@@ -8,6 +8,8 @@ Type=simple
 User={{SCANNER_USER}}
 WorkingDirectory={{SCANNER_DIR}}
 Environment=PYTHONPATH={{SCANNER_DIR}}/src
+Environment=OLLAMA_HOST={{OLLAMA_HOST}}
+ExecStartPre=/bin/bash -c 'for i in $(seq 1 {{LLM_READY_TIMEOUT}}); do curl -fsS {{LLM_READY_URL}} >/dev/null && exit 0; sleep 1; done; echo "LLM backend not reachable: {{LLM_READY_URL}}" >&2; exit 1'
 ExecStart={{PYTHON_BIN}} -m scanner_filer.cli --config {{CONFIG_PATH}} watch
 Restart=always
 RestartSec=3

@@ -9,7 +9,9 @@ import secrets
 import shutil
 import subprocess
 import tarfile
-from dataclasses import dataclass
+import threading
+import time
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from io import BytesIO
 from pathlib import Path
@@ -64,6 +66,185 @@ class QueueRecord:
     percent: int
     size_kb: float
     modified_iso: str
+
+
+_DOCS_CACHE_TTL_SECONDS = max(0.0, float(os.environ.get("SCANNER_WEB_DOCS_CACHE_TTL_SECONDS", "180")))
+_DOCS_CACHE_MAX_STALE_SECONDS = max(0.0, float(os.environ.get("SCANNER_WEB_DOCS_CACHE_MAX_STALE_SECONDS", "86400")))
+_DOCS_SNAPSHOT_FILE_NAME = os.environ.get("SCANNER_WEB_DOCS_SNAPSHOT_FILE", "documents_snapshot.json")
+_DOCS_CACHE_EXPIRES_AT = 0.0
+_DOCS_CACHE_ROWS: list[DocumentRecord] = []
+_DOCS_CACHE_LOCK = threading.Lock()
+_DOCS_REFRESH_IN_PROGRESS = False
+
+
+def _clone_document_rows(rows: list[DocumentRecord]) -> list[DocumentRecord]:
+    # Keep cached objects immutable across requests by cloning mutable fields.
+    return [replace(row, keywords=list(row.keywords)) for row in rows]
+
+
+def _docs_snapshot_path(cfg: AppConfig) -> Path:
+    return cfg.paths.state / _DOCS_SNAPSHOT_FILE_NAME
+
+
+def _doc_to_snapshot_payload(doc: DocumentRecord) -> dict[str, object]:
+    return {
+        "rel_path": doc.rel_path,
+        "abs_path": str(doc.abs_path),
+        "bucket": doc.bucket,
+        "filename": doc.filename,
+        "doc_type": doc.doc_type,
+        "sender": doc.sender,
+        "year": doc.year,
+        "size_bytes": int(doc.size_bytes),
+        "modified_iso": doc.modified_iso,
+        "modified_ts": float(doc.modified_ts),
+        "scanned_iso": doc.scanned_iso,
+        "sort_ts": float(doc.sort_ts),
+        "keywords": list(doc.keywords),
+        "suggested_type": doc.suggested_type,
+        "target_default_type": doc.target_default_type,
+        "target_default_year": doc.target_default_year,
+        "inbox_user": doc.inbox_user,
+        "auto_filed_recent": bool(doc.auto_filed_recent),
+        "auto_filed_iso": doc.auto_filed_iso,
+        "ai_decision_confidence": doc.ai_decision_confidence,
+        "ai_retry_pass": bool(doc.ai_retry_pass),
+        "ai_retry_state": doc.ai_retry_state,
+        "ai_suggested_type": doc.ai_suggested_type,
+        "ai_suggested_confidence": float(doc.ai_suggested_confidence),
+    }
+
+
+def _doc_from_snapshot_payload(payload: dict[str, object]) -> DocumentRecord | None:
+    try:
+        raw_conf = payload.get("ai_decision_confidence")
+        conf_val: float | None
+        if raw_conf in {None, ""}:
+            conf_val = None
+        else:
+            conf_val = float(raw_conf)  # type: ignore[arg-type]
+
+        raw_keywords = payload.get("keywords", [])
+        keywords = [str(k) for k in raw_keywords] if isinstance(raw_keywords, list) else []
+
+        return DocumentRecord(
+            rel_path=str(payload.get("rel_path", "")),
+            abs_path=Path(str(payload.get("abs_path", ""))),
+            bucket=str(payload.get("bucket", "")),
+            filename=str(payload.get("filename", "")),
+            doc_type=str(payload.get("doc_type", "unknown")),
+            sender=str(payload.get("sender", "")),
+            year=str(payload.get("year", "")),
+            size_bytes=int(payload.get("size_bytes", 0) or 0),
+            modified_iso=str(payload.get("modified_iso", "")),
+            modified_ts=float(payload.get("modified_ts", 0.0) or 0.0),
+            scanned_iso=str(payload.get("scanned_iso", "")),
+            sort_ts=float(payload.get("sort_ts", 0.0) or 0.0),
+            keywords=keywords,
+            suggested_type=str(payload.get("suggested_type", "")),
+            target_default_type=str(payload.get("target_default_type", "unknown")),
+            target_default_year=str(payload.get("target_default_year", "")),
+            inbox_user=str(payload.get("inbox_user", "")),
+            auto_filed_recent=bool(payload.get("auto_filed_recent", False)),
+            auto_filed_iso=str(payload.get("auto_filed_iso", "")),
+            ai_decision_confidence=conf_val,
+            ai_retry_pass=bool(payload.get("ai_retry_pass", False)),
+            ai_retry_state=str(payload.get("ai_retry_state", "")),
+            ai_suggested_type=str(payload.get("ai_suggested_type", "")),
+            ai_suggested_confidence=float(payload.get("ai_suggested_confidence", 0.0) or 0.0),
+        )
+    except Exception:
+        return None
+
+
+def _load_documents_snapshot(cfg: AppConfig) -> list[DocumentRecord]:
+    path = _docs_snapshot_path(cfg)
+    if not path.exists():
+        return []
+
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            payload = json.load(f)
+    except Exception:
+        return []
+
+    if not isinstance(payload, dict):
+        return []
+
+    created_at = float(payload.get("created_at", 0.0) or 0.0)
+    if _DOCS_CACHE_MAX_STALE_SECONDS > 0 and created_at > 0:
+        age = max(0.0, time.time() - created_at)
+        if age > _DOCS_CACHE_MAX_STALE_SECONDS:
+            return []
+
+    rows_raw = payload.get("rows", [])
+    if not isinstance(rows_raw, list):
+        return []
+
+    rows: list[DocumentRecord] = []
+    for row in rows_raw:
+        if not isinstance(row, dict):
+            continue
+        doc = _doc_from_snapshot_payload(row)
+        if not doc:
+            continue
+        if not doc.rel_path or not doc.bucket:
+            continue
+        rows.append(doc)
+    return rows
+
+
+def _save_documents_snapshot(cfg: AppConfig, rows: list[DocumentRecord]) -> None:
+    path = _docs_snapshot_path(cfg)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "created_at": time.time(),
+        "rows": [_doc_to_snapshot_payload(row) for row in rows],
+    }
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    with tmp.open("w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=True)
+    tmp.replace(path)
+
+
+def _publish_documents_cache(rows: list[DocumentRecord]) -> None:
+    global _DOCS_CACHE_EXPIRES_AT, _DOCS_CACHE_ROWS
+    cache_rows = _clone_document_rows(rows)
+    with _DOCS_CACHE_LOCK:
+        _DOCS_CACHE_ROWS = cache_rows
+        _DOCS_CACHE_EXPIRES_AT = time.monotonic() + _DOCS_CACHE_TTL_SECONDS if _DOCS_CACHE_TTL_SECONDS > 0 else 0.0
+
+
+def _start_documents_refresh_async(cfg: AppConfig) -> bool:
+    global _DOCS_REFRESH_IN_PROGRESS
+
+    with _DOCS_CACHE_LOCK:
+        if _DOCS_REFRESH_IN_PROGRESS:
+            return False
+        _DOCS_REFRESH_IN_PROGRESS = True
+
+    def _worker() -> None:
+        global _DOCS_REFRESH_IN_PROGRESS
+        try:
+            docs = _collect_documents_uncached(cfg)
+            _publish_documents_cache(docs)
+            _save_documents_snapshot(cfg, docs)
+        except Exception:
+            pass
+        finally:
+            with _DOCS_CACHE_LOCK:
+                _DOCS_REFRESH_IN_PROGRESS = False
+
+    threading.Thread(target=_worker, name="scanner-doc-cache-refresh", daemon=True).start()
+    return True
+
+
+def _invalidate_documents_cache(clear_rows: bool = False) -> None:
+    global _DOCS_CACHE_EXPIRES_AT, _DOCS_CACHE_ROWS
+    with _DOCS_CACHE_LOCK:
+        _DOCS_CACHE_EXPIRES_AT = 0.0
+        if clear_rows:
+            _DOCS_CACHE_ROWS = []
 
 
 STOPWORDS = {
@@ -435,7 +616,10 @@ def _suggest_type(doc: DocumentRecord, allowed_types: list[str], unknown_type: s
 
 
 def _safe_rel(base: Path, candidate: Path) -> str:
-    return str(candidate.resolve().relative_to(base.resolve()))
+    try:
+        return str(candidate.relative_to(base))
+    except Exception:
+        return str(candidate.resolve().relative_to(base.resolve()))
 
 
 def _safe_join(base: Path, rel_path: str) -> Path:
@@ -508,7 +692,7 @@ def _scan_bucket(cfg: AppConfig, root: Path, bucket: str, rel_prefix: str = "") 
     return rows
 
 
-def collect_documents(cfg: AppConfig) -> list[DocumentRecord]:
+def _collect_documents_uncached(cfg: AppConfig) -> list[DocumentRecord]:
     docs: list[DocumentRecord] = []
     docs.extend(_scan_bucket(cfg, cfg.paths.archive, "archive"))
     docs.extend(_scan_bucket(cfg, cfg.paths.review, "review"))
@@ -534,18 +718,17 @@ def collect_documents(cfg: AppConfig) -> list[DocumentRecord]:
             seen_roots.add(root_key)
             docs.extend(_scan_bucket(cfg, root, bucket, rel_prefix=username))
 
-    docs = [d for d in docs if d.abs_path.exists()]
     deduped: list[DocumentRecord] = []
     seen_docs: set[str] = set()
     for doc in docs:
-        key = str(doc.abs_path.resolve())
+        key = str(doc.abs_path)
         if key in seen_docs:
             continue
         seen_docs.add(key)
         deduped.append(doc)
     docs = deduped
 
-    known_users = {str(name).strip() for name in _load_user_inboxes(cfg).keys() if str(name).strip()}
+    known_users = {str(name).strip() for name in inboxes.keys() if str(name).strip()}
     for doc in docs:
         parts = Path(doc.rel_path).parts
         if parts and parts[0] in known_users:
@@ -567,6 +750,37 @@ def collect_documents(cfg: AppConfig) -> list[DocumentRecord]:
             d.target_default_type = first_allowed[0] if first_allowed else cfg.rules.unknown_doc_type
         d.target_default_year = _default_year_for_doc(d)
     docs.sort(key=lambda d: d.sort_ts, reverse=True)
+    return docs
+
+
+def collect_documents(cfg: AppConfig) -> list[DocumentRecord]:
+    if _DOCS_CACHE_TTL_SECONDS <= 0:
+        return _collect_documents_uncached(cfg)
+
+    now = time.monotonic()
+    with _DOCS_CACHE_LOCK:
+        cached_rows = _DOCS_CACHE_ROWS
+        cached_expires_at = _DOCS_CACHE_EXPIRES_AT
+        refresh_in_progress = _DOCS_REFRESH_IN_PROGRESS
+
+    if cached_rows and now < cached_expires_at:
+        return _clone_document_rows(cached_rows)
+
+    if cached_rows:
+        if not refresh_in_progress:
+            _start_documents_refresh_async(cfg)
+        # Serve stale rows while refresh runs to keep UI responsive.
+        return _clone_document_rows(cached_rows)
+
+    snapshot_rows = _load_documents_snapshot(cfg)
+    if snapshot_rows:
+        _publish_documents_cache(snapshot_rows)
+        _start_documents_refresh_async(cfg)
+        return _clone_document_rows(snapshot_rows)
+
+    docs = _collect_documents_uncached(cfg)
+    _publish_documents_cache(docs)
+    _save_documents_snapshot(cfg, docs)
     return docs
 
 
@@ -750,7 +964,7 @@ def _attach_recent_autofile_status(cfg: AppConfig, docs: list[DocumentRecord]) -
         return
     manual = _load_manual_actions(cfg)
     for doc in docs:
-        key = str(doc.abs_path.resolve())
+        key = str(doc.abs_path)
         event_ts = events.get(key)
         if event_ts is None:
             continue
@@ -878,7 +1092,7 @@ def _attach_recent_ai_decisions(cfg: AppConfig, docs: list[DocumentRecord]) -> N
         return
 
     for doc in docs:
-        key = str(doc.abs_path.resolve())
+        key = str(doc.abs_path)
         row = decisions.get(key)
         if not row:
             continue
@@ -894,7 +1108,7 @@ def _attach_recent_ai_suggestions(cfg: AppConfig, docs: list[DocumentRecord]) ->
         return
 
     for doc in docs:
-        key = str(doc.abs_path.resolve())
+        key = str(doc.abs_path)
         row = suggestions.get(key)
         if not row:
             continue
@@ -1189,11 +1403,8 @@ def _attach_keywords(
     extracted_count = 0
 
     for doc in docs:
-        if not doc.abs_path.exists():
-            continue
         key = f"{doc.bucket}:{doc.rel_path}"
-        stat = doc.abs_path.stat()
-        sig = f"{stat.st_mtime_ns}:{stat.st_size}"
+        sig = f"{int(doc.modified_ts * 1_000_000_000)}:{doc.size_bytes}"
         cached = records.get(key)
 
         if isinstance(cached, dict) and isinstance(cached.get("manual_keywords"), list):
@@ -1213,6 +1424,10 @@ def _attach_keywords(
             continue
 
         if not allow_extract or extracted_count >= max_new_extracts:
+            doc.keywords = []
+            continue
+
+        if not doc.abs_path.exists():
             doc.keywords = []
             continue
 
@@ -1876,7 +2091,8 @@ def create_app(cfg: AppConfig, config_path: Path) -> Flask:
 
     @app.after_request
     def _security_headers(resp):
-        resp.headers["X-Frame-Options"] = "DENY"
+        allow_embed_preview = request.path == "/open" and request.args.get("embed", "0") == "1"
+        resp.headers["X-Frame-Options"] = "SAMEORIGIN" if allow_embed_preview else "DENY"
         resp.headers["X-Content-Type-Options"] = "nosniff"
         resp.headers["Referrer-Policy"] = "same-origin"
         resp.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
@@ -1952,6 +2168,7 @@ def create_app(cfg: AppConfig, config_path: Path) -> Flask:
         sort_by = request.args.get("sort_by", "processed").strip() or "processed"
         sort_dir = request.args.get("sort_dir", "desc").strip() or "desc"
         focus_rel = request.args.get("focus_rel", "").strip()
+        focus_bucket = request.args.get("focus_bucket", "").strip().lower()
         try:
             page = int(request.args.get("page", "1") or "1")
         except ValueError:
@@ -1971,7 +2188,7 @@ def create_app(cfg: AppConfig, config_path: Path) -> Flask:
 
         if focus_rel:
             for i, row in enumerate(filtered):
-                if str(row.rel_path) == focus_rel:
+                if str(row.rel_path) == focus_rel and (not focus_bucket or row.bucket == focus_bucket):
                     page = (i // page_size) + 1
                     break
 
@@ -2034,6 +2251,7 @@ def create_app(cfg: AppConfig, config_path: Path) -> Flask:
             sort_by=sort_by,
             sort_dir=sort_dir,
             focus_rel=focus_rel,
+            focus_bucket=focus_bucket,
             keyword_override_rows=sorted(cfg.rules.keyword_overrides.items(), key=lambda kv: str(kv[0]).lower()),
             llm_rule_candidates=llm_rule_candidates,
             llm_rule_rejected=llm_rule_rejected,
@@ -2083,6 +2301,7 @@ def create_app(cfg: AppConfig, config_path: Path) -> Flask:
                 "stable_cycles_required": int(cfg.stable_cycles_required),
                 "auto_file_highlight_window": str(cfg.auto_file_highlight_window),
                 "log_level": str(cfg.log_level),
+                "hover_preview_enabled": bool(getattr(cfg, "hover_preview_enabled", True)),
                 "llm_enabled": bool(cfg.llm.enabled),
                 "llm_timeout_seconds": int(cfg.llm.timeout_seconds),
                 "llm_max_input_chars": int(cfg.llm.max_input_chars),
@@ -2144,8 +2363,36 @@ def create_app(cfg: AppConfig, config_path: Path) -> Flask:
     def llm_json_health_api():
         return jsonify(_load_llm_json_health(cfg))
 
+    @app.get("/api/search")
+    def search_api():
+        q = request.args.get("q", "").strip()
+        bucket = request.args.get("bucket", "all").strip() or "all"
+        sort_by = request.args.get("sort_by", "processed").strip() or "processed"
+        sort_dir = request.args.get("sort_dir", "desc").strip() or "desc"
+
+        if not q:
+            return jsonify({"total": 0, "returned": 0, "rows": []})
+
+        docs = collect_documents(cfg)
+        filtered = [d for d in docs if _matches(d, q, bucket)]
+        filtered = _sort_documents(filtered, sort_by, sort_dir)
+
+        rows = [
+            {
+                "bucket": d.bucket,
+                "rel_path": d.rel_path,
+                "filename": d.filename,
+                "doc_type": d.doc_type,
+                "sender": d.sender,
+                "modified_iso": d.modified_iso,
+            }
+            for d in filtered
+        ]
+        return jsonify({"total": len(filtered), "returned": len(rows), "rows": rows})
+
     @app.post("/purge-processing")
     def purge_processing():
+        _invalidate_documents_cache()
         next_query = request.form.get("next", "").strip() or request.args.get("next", "").strip()
         processing_dir = cfg.paths.processing
         if not processing_dir.exists():
@@ -2230,6 +2477,7 @@ def create_app(cfg: AppConfig, config_path: Path) -> Flask:
 
     @app.post("/keywords")
     def update_keywords():
+        _invalidate_documents_cache()
         next_query = request.form.get("next", "").strip()
         src_bucket = request.form.get("src_bucket", "")
         rel_path = request.form.get("rel_path", "")
@@ -2272,6 +2520,7 @@ def create_app(cfg: AppConfig, config_path: Path) -> Flask:
 
     @app.post("/setup/nas")
     def setup_nas():
+        _invalidate_documents_cache()
         next_query = request.form.get("next", "").strip()
         nas_host = request.form.get("nas_host", "").strip()
         nas_share = request.form.get("nas_share", "").strip()
@@ -2919,6 +3168,7 @@ def create_app(cfg: AppConfig, config_path: Path) -> Flask:
         llm_retry_on_failure_enabled = request.form.get("llm_retry_on_failure_enabled", "off") == "on"
         llm_retry_profile = request.form.get("llm_retry_profile", "").strip().lower() or "deep"
         ocr_enabled = request.form.get("ocr_enabled", "off") == "on"
+        hover_preview_enabled = request.form.get("hover_preview_enabled", "off") == "on"
 
         if llm_profile not in LLM_PROFILE_CHOICES:
             return _redirect_index_with_context("LLM profile must be fast, balanced, deep, ultra, or custom", next_query)
@@ -2973,6 +3223,8 @@ def create_app(cfg: AppConfig, config_path: Path) -> Flask:
         raw["stable_cycles_required"] = stable_cycles_required
         raw["auto_file_highlight_window"] = auto_file_highlight_window
         raw["log_level"] = log_level
+        raw.setdefault("ui", {})
+        raw["ui"]["hover_preview_enabled"] = bool(hover_preview_enabled)
         raw.setdefault("llm", {})
         raw["llm"]["enabled"] = bool(llm_enabled)
         raw["llm"]["timeout_seconds"] = llm_timeout_seconds
@@ -2992,6 +3244,7 @@ def create_app(cfg: AppConfig, config_path: Path) -> Flask:
         cfg.stable_cycles_required = stable_cycles_required
         cfg.auto_file_highlight_window = auto_file_highlight_window
         cfg.log_level = log_level
+        cfg.hover_preview_enabled = bool(hover_preview_enabled)
         cfg.llm.enabled = bool(llm_enabled)
         cfg.llm.timeout_seconds = llm_timeout_seconds
         cfg.llm.max_input_chars = llm_max_input_chars
@@ -3045,6 +3298,7 @@ def create_app(cfg: AppConfig, config_path: Path) -> Flask:
 
     @app.post("/setup/user-inbox/add")
     def setup_user_inbox_add():
+        _invalidate_documents_cache()
         next_query = request.form.get("next", "").strip()
         name = request.form.get("name", "").strip()
         nas_host = request.form.get("nas_host", "").strip()
@@ -3113,6 +3367,7 @@ def create_app(cfg: AppConfig, config_path: Path) -> Flask:
 
     @app.post("/setup/user-inbox/update")
     def setup_user_inbox_update():
+        _invalidate_documents_cache()
         next_query = request.form.get("next", "").strip()
         current_name = request.form.get("current_name", "").strip()
         new_name = request.form.get("name", "").strip()
@@ -3226,6 +3481,7 @@ def create_app(cfg: AppConfig, config_path: Path) -> Flask:
 
     @app.post("/setup/user-inbox/delete")
     def setup_user_inbox_delete():
+        _invalidate_documents_cache()
         next_query = request.form.get("next", "").strip()
         name = request.form.get("name", "").strip()
 
@@ -3239,6 +3495,7 @@ def create_app(cfg: AppConfig, config_path: Path) -> Flask:
 
     @app.post("/setup/user-inbox/apply")
     def setup_user_inbox_apply():
+        _invalidate_documents_cache()
         next_query = request.form.get("next", "").strip()
         samba_password = request.form.get("samba_password", "")
 
@@ -3280,6 +3537,7 @@ def create_app(cfg: AppConfig, config_path: Path) -> Flask:
 
     @app.post("/move")
     def move_document():
+        _invalidate_documents_cache()
         next_query = request.form.get("next", "").strip()
         src_bucket = request.form.get("src_bucket", "")
         rel_path = request.form.get("rel_path", "")
@@ -3355,6 +3613,7 @@ def create_app(cfg: AppConfig, config_path: Path) -> Flask:
 
     @app.post("/move-inbox-bulk")
     def move_inbox_bulk():
+        _invalidate_documents_cache()
         next_query = request.form.get("next", "").strip()
         target_user = request.form.get("target_user", "").strip()
         selected = request.form.getlist("selected")
@@ -3430,6 +3689,7 @@ def create_app(cfg: AppConfig, config_path: Path) -> Flask:
 
     @app.post("/reclassify-bulk")
     def reclassify_bulk():
+        _invalidate_documents_cache()
         next_query = request.form.get("next", "").strip()
         selected = request.form.getlist("selected")
 
@@ -3506,6 +3766,7 @@ def create_app(cfg: AppConfig, config_path: Path) -> Flask:
 
     @app.post("/reclassify")
     def reclassify_document():
+        _invalidate_documents_cache()
         next_query = request.form.get("next", "").strip()
         src_bucket = request.form.get("src_bucket", "")
         rel_path = request.form.get("rel_path", "")
@@ -3535,6 +3796,7 @@ def create_app(cfg: AppConfig, config_path: Path) -> Flask:
 
     @app.post("/split")
     def split_document():
+        _invalidate_documents_cache()
         next_query = request.form.get("next", "").strip()
         src_bucket = request.form.get("src_bucket", "")
         rel_path = request.form.get("rel_path", "")
@@ -3568,6 +3830,7 @@ def create_app(cfg: AppConfig, config_path: Path) -> Flask:
 
     @app.post("/split-manual")
     def split_document_manual():
+        _invalidate_documents_cache()
         next_query = request.form.get("next", "").strip()
         src_bucket = request.form.get("src_bucket", "")
         rel_path = request.form.get("rel_path", "")
@@ -3607,6 +3870,7 @@ def create_app(cfg: AppConfig, config_path: Path) -> Flask:
 
     @app.post("/delete")
     def delete_document():
+        _invalidate_documents_cache()
         next_query = request.form.get("next", "").strip()
         src_bucket = request.form.get("src_bucket", "")
         rel_path = request.form.get("rel_path", "")
@@ -3683,6 +3947,9 @@ def create_app(cfg: AppConfig, config_path: Path) -> Flask:
         cfg.splitter.low_similarity_threshold = round(low_similarity, 3)
 
         return _redirect_index_with_context("Updated splitter settings", next_query)
+
+    if _DOCS_CACHE_TTL_SECONDS > 0:
+        _start_documents_refresh_async(cfg)
 
     return app
 

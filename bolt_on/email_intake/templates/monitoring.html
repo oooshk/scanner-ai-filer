@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Shipment &amp; Policy Monitoring</title>
+  <style>
+    body { margin: 0; font-family: "IBM Plex Sans", "Segoe UI", sans-serif; background: #f5f8fb; color: #1f2a3d; }
+    main { max-width: 1260px; margin: 0 auto; padding: 16px; }
+    .card { background: #fff; border: 1px solid #d6e2ef; border-radius: 10px; padding: 14px; margin-bottom: 14px; }
+    h1, h2 { margin: 0 0 8px; }
+    .muted { color: #5f6b80; font-size: 13px; }
+    .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+    .btn-link { display: inline-block; border: 0; border-radius: 8px; padding: 8px 12px; background: #1f6feb; color: #fff; text-decoration: none; }
+    .btn-link.secondary { background: #2f855a; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { border-bottom: 1px solid #e6edf5; text-align: left; padding: 7px; font-size: 13px; vertical-align: top; }
+    code { background: #eef3f8; border-radius: 6px; padding: 2px 5px; }
+    .pill { display: inline-block; border-radius: 999px; padding: 2px 8px; font-size: 11px; font-weight: 600; }
+    .pill.ok { background: #d2f5ea; color: #0e5b4f; }
+    .pill.warn { background: #fff3cd; color: #7b5e00; }
+    .pill.bad { background: #ffd9d6; color: #9f1d1d; }
+    .pill.muted { background: #ebeff5; color: #42526d; }
+    a.link { color: #1f6feb; text-decoration: none; }
+    .sort-note { font-size: 12px; color: #5f6b80; }
+  </style>
+</head>
+<body>
+  <main>
+    <section class="card">
+      <h1>Shipment &amp; Policy Monitoring</h1>
+      <p class="muted">Carrier-focused shipment tracking and insurance policy monitoring extracted from email intake.</p>
+      <div class="row">
+        <a class="btn-link" href="/">Back to Email Intake</a>
+        <a class="btn-link secondary" href="/entities">Tracked Entities</a>
+        <a class="btn-link secondary" href="/info">Tracking &amp; Storage Info</a>
+        {% if show_hidden %}
+        <a class="btn-link secondary" href="/monitoring?show_hidden=0&hide_statuses={{ hide_statuses_csv|urlencode }}" style="background:#9f1d1d;">Hide Filtered Statuses</a>
+        {% else %}
+        <a class="btn-link secondary" href="/monitoring?show_hidden=1&hide_statuses={{ hide_statuses_csv|urlencode }}" style="background:#5b6f1f;">Show All Statuses</a>
+        {% endif %}
+        <form method="post" action="/logout" style="margin:0;">
+          <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+          <button type="submit" style="border:0;border-radius:8px;padding:8px 12px;background:#4b5568;color:#fff;cursor:pointer;">Sign Out{% if auth_user %} ({{ auth_user }}){% endif %}</button>
+        </form>
+      </div>
+      <p class="sort-note">Hidden statuses: {{ hide_statuses_csv }}{% if show_hidden %} (currently showing all){% endif %}</p>
+    </section>
+
+    <section class="card">
+      <h2>Shipment Summary</h2>
+      <p class="muted">Total: {{ shipments|length }} | Active monitoring: {{ active_shipments|length }} | Retired: {{ retired_shipments|length }}</p>
+      <p class="sort-note">Sorted by {{ ship_sort }} ({{ ship_dir }})</p>
+      {% if shipments %}
+      <table>
+        <thead>
+          <tr>
+            <th><a class="link" href="{{ ship_sort_urls.carrier }}">Carrier</a></th>
+            <th><a class="link" href="{{ ship_sort_urls.tracking_number }}">Tracking Number</a></th>
+            <th><a class="link" href="{{ ship_sort_urls.status }}">Status</a></th>
+            <th><a class="link" href="{{ ship_sort_urls.eta_date }}">ETA</a></th>
+            <th><a class="link" href="{{ ship_sort_urls.last_location }}">Location</a></th>
+            <th><a class="link" href="{{ ship_sort_urls.tracking_postcode }}">Postcode</a></th>
+            <th>Tracking Link</th>
+            <th><a class="link" href="{{ ship_sort_urls.last_seen_at }}">Last Seen</a></th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in shipments %}
+          {% set p = r.payload or {} %}
+          <tr>
+            <td>{{ p.get('carrier', 'unknown') }}</td>
+            <td><code>{{ r.entity_key }}</code></td>
+            <td>
+              {% if p.get('active_monitoring', True) %}
+              <span class="pill ok">{{ p.get('status', 'unknown') }}</span>
+              {% else %}
+              <span class="pill muted">retired ({{ p.get('status', 'unknown') }})</span>
+              {% endif %}
+            </td>
+            <td>{{ p.get('eta_date', '') }}</td>
+            <td>{{ p.get('last_location', '') }}</td>
+            <td>{{ p.get('tracking_postcode', '') }}</td>
+            <td>
+              {% if p.get('tracking_url_ui') %}
+              <a href="{{ p.get('tracking_url_ui') }}" target="_blank" rel="noopener">track on {{ p.get('carrier', 'carrier') }}</a>
+              {% else %}
+              <span class="muted">none</span>
+              {% endif %}
+            </td>
+            <td>{{ r.last_seen_at }}</td>
+            <td>
+              <form method="post" action="/monitoring/untrack" onsubmit="return confirm('Remove this shipment entry?');" style="margin:0;">
+                <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+                <input type="hidden" name="entity_type" value="shipment">
+                <input type="hidden" name="entity_key" value="{{ r.entity_key }}">
+                <input type="hidden" name="ship_sort" value="{{ ship_sort }}">
+                <input type="hidden" name="ship_dir" value="{{ ship_dir }}">
+                <input type="hidden" name="pol_sort" value="{{ pol_sort }}">
+                <input type="hidden" name="pol_dir" value="{{ pol_dir }}">
+                <input type="hidden" name="hide_statuses" value="{{ hide_statuses_csv }}">
+                <input type="hidden" name="show_hidden" value="{{ '1' if show_hidden else '0' }}">
+                <button type="submit" style="background:#b42318;color:#fff;border:0;border-radius:8px;padding:6px 10px;cursor:pointer;">Remove</button>
+              </form>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <p class="muted">No known-carrier shipment entities yet.</p>
+      {% endif %}
+    </section>
+
+    <section class="card">
+      <h2>Insurance Policy Summary</h2>
+      <p class="muted">Total: {{ policies|length }} | Live: {{ live_policies|length }} | Needs attention: {{ expiring_policies|length }}</p>
+      <p class="sort-note">Sorted by {{ pol_sort }} ({{ pol_dir }})</p>
+      {% if policies %}
+      <table>
+        <thead>
+          <tr>
+            <th><a class="link" href="{{ pol_sort_urls.policy_number }}">Policy Number</a></th>
+            <th><a class="link" href="{{ pol_sort_urls.policy_type }}">Type</a></th>
+            <th><a class="link" href="{{ pol_sort_urls.provider }}">Provider</a></th>
+            <th><a class="link" href="{{ pol_sort_urls.live }}">Live</a></th>
+            <th><a class="link" href="{{ pol_sort_urls.expires_on }}">Expiry</a></th>
+            <th><a class="link" href="{{ pol_sort_urls.expiry_alert }}">Alert</a></th>
+            <th><a class="link" href="{{ pol_sort_urls.status }}">Status</a></th>
+            <th><a class="link" href="{{ pol_sort_urls.last_seen_at }}">Last Seen</a></th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in policies %}
+          {% set p = r.payload or {} %}
+          {% set alert = (p.get('expiry_alert', 'unknown') or 'unknown') %}
+          <tr>
+            <td><code>{{ r.entity_key }}</code></td>
+            <td>{{ p.get('policy_type', 'unknown') }}</td>
+            <td>{{ p.get('provider', 'unknown') }}</td>
+            <td>
+              {% if p.get('live', False) %}
+              <span class="pill ok">live</span>
+              {% else %}
+              <span class="pill bad">not live</span>
+              {% endif %}
+            </td>
+            <td>{{ p.get('expires_on', '') }}</td>
+            <td>
+              {% if alert == 'expired' %}
+              <span class="pill bad">expired</span>
+              {% elif alert == 'expiring_soon' %}
+              <span class="pill warn">expiring soon</span>
+              {% elif alert == 'ok' %}
+              <span class="pill ok">ok</span>
+              {% else %}
+              <span class="pill muted">unknown</span>
+              {% endif %}
+            </td>
+            <td>{{ p.get('status', 'active_or_unknown') }}</td>
+            <td>{{ r.last_seen_at }}</td>
+            <td>
+              <form method="post" action="/monitoring/untrack" onsubmit="return confirm('Remove this policy entry?');" style="margin:0;">
+                <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+                <input type="hidden" name="entity_type" value="policy">
+                <input type="hidden" name="entity_key" value="{{ r.entity_key }}">
+                <input type="hidden" name="ship_sort" value="{{ ship_sort }}">
+                <input type="hidden" name="ship_dir" value="{{ ship_dir }}">
+                <input type="hidden" name="pol_sort" value="{{ pol_sort }}">
+                <input type="hidden" name="pol_dir" value="{{ pol_dir }}">
+                <input type="hidden" name="hide_statuses" value="{{ hide_statuses_csv }}">
+                <input type="hidden" name="show_hidden" value="{{ '1' if show_hidden else '0' }}">
+                <button type="submit" style="background:#b42318;color:#fff;border:0;border-radius:8px;padding:6px 10px;cursor:pointer;">Remove</button>
+              </form>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <p class="muted">No policy entities found yet.</p>
+      {% endif %}
+    </section>
+  </main>
+</body>
+</html>

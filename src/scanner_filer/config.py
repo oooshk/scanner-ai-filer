@@ -93,6 +93,7 @@ class AppConfig:
     public_online_lookup_enabled: bool
     public_acronym_overrides: dict[str, str]
     log_level: str
+    hover_preview_enabled: bool
 
 
 def _path(v: str) -> Path:
@@ -212,6 +213,7 @@ def load_config(config_path: Path) -> AppConfig:
     recognition_raw: dict[str, Any] = raw.get("recognition", {})
     learning_raw: dict[str, Any] = raw.get("learning", {})
     public_raw: dict[str, Any] = raw.get("public_knowledge", {})
+    ui_raw: dict[str, Any] = raw.get("ui", {})
 
     public_acronym_overrides: dict[str, str] = {}
     overrides_raw = public_raw.get("acronym_overrides", {})
@@ -246,6 +248,7 @@ def load_config(config_path: Path) -> AppConfig:
         public_online_lookup_enabled=bool(public_raw.get("online_lookup_enabled", False)),
         public_acronym_overrides=public_acronym_overrides,
         log_level=str(raw.get("log_level", "INFO")),
+        hover_preview_enabled=bool(ui_raw.get("hover_preview_enabled", True)),
     )
 
 

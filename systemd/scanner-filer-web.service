@@ -8,6 +8,7 @@ Type=simple
 User={{SCANNER_USER}}
 WorkingDirectory={{SCANNER_DIR}}
 Environment=PYTHONPATH={{SCANNER_DIR}}/src
+Environment=OLLAMA_HOST={{OLLAMA_HOST}}
 Environment=SCANNER_WEB_USER={{WEB_USER}}
 Environment=SCANNER_WEB_PASSWORD={{WEB_PASSWORD}}
 Environment=SCANNER_WEB_ENABLE_SETUP={{WEB_ENABLE_SETUP}}

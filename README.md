@@ -54,8 +54,16 @@ cifs-utils    samba        samba-common-bin  acl
 **Python** ≥ 3.10
 
 **LLM** — one of:
+- Hailo-Ollama endpoint on Hailo-10H (Ollama-compatible API on `http://127.0.0.1:8000`)
 - [Ollama](https://ollama.com/) with a model such as `qwen2.5:3b-instruct` (recommended)
 - [llama.cpp](https://github.com/ggerganov/llama.cpp) binary (`llama-completion`)
+
+For Hailo-10H hosts:
+
+```bash
+chmod +x scripts/setup_hailo_ollama.sh
+./scripts/setup_hailo_ollama.sh --model qwen2.5-instruct:1.5b
+```
 
 ### Recommended Profile Models (Raspberry Pi)
 
@@ -126,6 +134,13 @@ llm:
   enabled: true
   # Ollama (recommended):
   command_template: ollama run qwen2.5:3b-instruct
+```
+
+For Hailo-Ollama, use the bundled REST wrapper script. Hailo-Ollama exposes an Ollama-compatible HTTP API, but not the `ollama run` CLI:
+
+```yaml
+llm:
+  command_template: /usr/bin/python3 <SCANNER_DIR>/scripts/hailo_ollama_generate.py qwen2.5-instruct:1.5b
 ```
 
 Key options:
@@ -210,12 +225,15 @@ Open `http://<SCANNER_HOST_OR_IP>:8090` from any device on your LAN.
 chmod +x scripts/install_systemd_services.sh
 ./scripts/install_systemd_services.sh
 
+# Hailo-Ollama endpoint:
+# OLLAMA_HOST=http://127.0.0.1:8000 HAILO_OLLAMA_ENABLE=true ./scripts/install_systemd_services.sh
+
 # Optional overrides (examples):
 # SCANNER_DIR=/opt/scanner-filer SCANNER_USER=scanner ./scripts/install_systemd_services.sh
 # WEB_HOST=0.0.0.0 WEB_PORT=8090 WEB_ALLOWED_NETS="127.0.0.1/32,::1/128,192.168.0.0/16" ./scripts/install_systemd_services.sh
 ```
 
-Both services restart automatically on failure.
+When `OLLAMA_HOST` points at the local Hailo endpoint, the installer can also enable a `hailo-ollama` system service. The scanner services restart automatically on failure.
 
 ---
 
@@ -277,6 +295,20 @@ Manual split is also available per-document from the web UI.
 ```yaml
 llm:
   command_template: ollama run qwen2.5:3b-instruct
+```
+
+### Hailo-Ollama (Hailo-10H)
+
+```yaml
+llm:
+  command_template: /usr/bin/python3 <SCANNER_DIR>/scripts/hailo_ollama_generate.py qwen2.5-instruct:1.5b
+```
+
+Run scanner services with:
+
+```bash
+OLLAMA_HOST=http://127.0.0.1:8000 HAILO_OLLAMA_ENABLE=true ./scripts/install_systemd_services.sh
+./scripts/setup_hailo_ollama.sh --model qwen2.5-instruct:1.5b
 ```
 
 ### llama.cpp

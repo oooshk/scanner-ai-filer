@@ -1,0 +1,253 @@
+paths:
+  inbox: /home/pi/scanner/inbox
+  processing: /home/pi/scanner/processing
+  review: /mnt/qnap_public/Home Filing/review
+  archive: /mnt/qnap_public/Home Filing/archive
+  rejected: /mnt/qnap_public/Home Filing/rejected
+  state: /home/pi/scanner/state
+ocr:
+  enabled: true
+  command: ocrmypdf
+  language: eng
+  skip_text: true
+  rotate_pages: true
+  deskew: true
+  clean: false
+  extra_args: ''
+llm:
+  enabled: true
+  timeout_seconds: 600
+  max_input_chars: 2800
+  min_confidence_autofile: 0.75
+  classification_descriptor: Act as an expert filing secretary. Classify by the document's
+    purpose, legal/financial meaning, and likely filing intent for later retrieval.
+    Use OCR evidence holistically; do not anchor on isolated words.
+  classification_guidance: MOT certificates and DVSA vehicle test documents should
+    be classified as vehicles, not invoice. Prefer vehicles for terms like MOT, DVSA,
+    vehicle registration mark, test certificate, odometer, VIN, V5C. Optical documents
+    (optometrist, eye test, prescription, lens specification, axis/prism/cyl values)
+    should be medical, never payslip.
+  category_suggestion_enabled: true
+  auto_create_suggested_categories: true
+  auto_create_min_confidence: 0.93
+  fallback_command_template: /home/pi/llama.cpp/build/bin/llama-completion -m /home/pi/models/Qwen2.5-1.5B-Instruct-Q4_K_M.gguf
+    -n 300 --temp 0 --ctx-size 1024 -no-cnv --no-display-prompt --no-warmup --simple-io
+    --json-schema '{"type":"object","additionalProperties":false,"required":["doc_type","vendor_or_sender","date","tags","confidence","reason"],"properties":{"doc_type":{"type":"string","enum":["council_tax","bank_statement","pension","utility_bill","insurance","tax","medical","payslip","invoice","receipt","legal","personal","solar","vets","building","poferries","vehicles","self_assessment","pets","unknown"]},"vendor_or_sender":{"type":"string","minLength":1,"maxLength":80},"date":{"type":"string","pattern":"^(|\\\\d{4}-\\\\d{2}-\\\\d{2})$"},"tags":{"type":"array","maxItems":4,"items":{"type":"string","maxLength":24}},"confidence":{"type":"number","minimum":0,"maximum":1},"reason":{"type":"string","minLength":1,"maxLength":160},"suggested_doc_type":{"type":"string","pattern":"^[a-z0-9_]{0,40}$"},"suggested_doc_type_confidence":{"type":"number","minimum":0,"maximum":1}}}'
+    -p "{prompt}"
+  json_metrics_path: /home/pi/scanner/state/llm_json_metrics.json
+  json_failure_window_size: 40
+  json_failure_rate_threshold: 0.35
+  json_consecutive_failure_threshold: 3
+  json_fallback_cooldown_calls: 10
+  command_template: /home/pi/llama.cpp/build/bin/llama-completion -m /home/pi/models/Qwen2.5-3B-Instruct-Q4_K_M.gguf
+    -n 320 --temp 0 --ctx-size 4096 -no-cnv --no-display-prompt --no-warmup --simple-io
+    --json-schema '{"type":"object","additionalProperties":false,"required":["doc_type","vendor_or_sender","date","tags","confidence","reason"],"properties":{"doc_type":{"type":"string","enum":["council_tax","bank_statement","pension","utility_bill","insurance","tax","medical","payslip","invoice","receipt","legal","personal","solar","vets","building","poferries","vehicles","self_assessment","pets","electric_heater","cancellation","refund","application","data_protection","electricity_bill","travel_insurance","explorer","unknown"]},"vendor_or_sender":{"type":"string","minLength":1,"maxLength":80},"date":{"type":"string","pattern":"^(|\\\\d{4}-\\\\d{2}-\\\\d{2})$"},"tags":{"type":"array","maxItems":4,"items":{"type":"string","maxLength":24}},"confidence":{"type":"number","minimum":0,"maximum":1},"reason":{"type":"string","minLength":1,"maxLength":160},"suggested_doc_type":{"type":"string","pattern":"^[a-z0-9_]{0,40}$"},"suggested_doc_type_confidence":{"type":"number","minimum":0,"maximum":1}}}'
+    -p "{prompt}"
+  profile: balanced
+splitter:
+  enabled: true
+  min_pages_to_split: 3
+  max_first_page_chars: 700
+  content_aware_enabled: true
+  boundary_score_threshold: 0.82
+  low_similarity_threshold: 0.3
+  boundary_keywords:
+  - statement
+  - statement of account
+  - invoice
+  - invoice no
+  - receipt
+  - policy
+  - policy number
+  - council tax
+  - pension
+  - account number
+  - certificate
+  - dear
+  - patient
+rules:
+  allowed_doc_types:
+  - council_tax
+  - bank_statement
+  - pension
+  - utility_bill
+  - insurance
+  - tax
+  - medical
+  - payslip
+  - invoice
+  - receipt
+  - legal
+  - personal
+  - solar
+  - vets
+  - building
+  - poferries
+  - vehicles
+  - self_assessment
+  - pets
+  - electric_heater
+  - cancellation
+  - refund
+  - application
+  - data_protection
+  - electricity_bill
+  - travel_insurance
+  - explorer
+  - mortgage
+  - employment
+  - unknown
+  unknown_doc_type: unknown
+  keyword_overrides:
+    mot test certificate: vehicles
+    dvsa: vehicles
+    vehicle registration mark: vehicles
+    odometer: vehicles
+    v5c: vehicles
+    vin: vehicles
+    account: bank_statement
+    interest: bank_statement
+    april: bank_statement
+    royston: bank_statement
+    about please visit: bank_statement
+    sessions: medical
+    clinical: medical
+    number sessions: medical
+    severe: medical
+    clinical outcomes routine: medical
+    contact lens specification: medical
+    eye examination: medical
+    axis prism base: medical
+    optometrists of ashford: medical
+    matter: personal
+    accused: personal
+    appreciate: personal
+    email: personal
+    details: pets
+    website: pets
+    pets lost without: pets
+    vets now: vets
+    coombe valley road: building
+    valley road dover: building
+    coombe valley: building
+    road dover: building
+    under act: building
+    works: building
+    flat roof: building
+    above: building
+    flat roof specialist: building
+    dover: building
+    existing: building
+    mark walton: building
+    bathroom: building
+    extension: building
+    registered: utility_bill
+    royal mail: utility_bill
+    company: utility_bill
+    jenuuy: pension
+    jenuuy z02: pension
+    uobay: pension
+    ebieyo jenuuy: pension
+    jnoa anjea: pension
+    prudential regulation: pension
+    investment: pension
+    largest realisable investment: pension
+    financial: pension
+    garage: vehicles
+    repair: vehicles
+    a4g.... srnow sce: vehicles
+    aa. nue address: vehicles
+    address cote valley.: vehicles
+    aing lake eine: vehicles
+    vehicle: vehicles
+    seller: vehicles
+    terms: vehicles
+    terms conditions: vehicles
+    britain: personal
+    chief engineer britain: personal
+    being: poferries
+    metal: poferries
+    jersey: poferries
+    service: poferries
+    crewing services: poferries
+    jersey limited: poferries
+    crewing: poferries
+    voltage: poferries
+    high voltage: poferries
+    marine: poferries
+    report: poferries
+    warning: poferries
+    clement ewubare: poferries
+    pride canterbury: poferries
+    annexe: poferries
+    error: poferries
+    ferries: poferries
+    france: poferries
+    chief engineer: poferries
+    master france: poferries
+    new text: poferries
+    system: poferries
+    steve: poferries
+    please: mortgage
+    remortgage: mortgage
+    title: mortgage
+    completion: mortgage
+    mortgage: mortgage
+    property: mortgage
+    natwest: mortgage
+    insurance: insurance
+    insurers: insurance
+    information: insurance
+    only pets cover: pets
+    cover: pets
+    only pets: pets
+    event: invoice
+    clifton: invoice
+    monday: invoice
+    virgin media: legal
+    virgin: legal
+    media: legal
+    apply two coats: invoice
+    fill make good: invoice
+    two coats white: invoice
+    apply two: invoice
+    coats white: invoice
+  negative_type_keywords:
+    invoice:
+    - mot
+    - dvsa
+    - vehicle registration mark
+    - test certificate
+    - odometer
+    - v5c
+    - vin
+    payslip:
+    - optometr
+    - prescription
+    - contact lens
+    - lens specification
+    - axis
+    - prism
+    - cyl
+    - eye examination
+  per_type_min_confidence:
+    vehicles: 0.8
+    invoice: 0.9
+    pension: 0.7
+poll_seconds: 5
+inbox_settle_seconds: 30
+require_size_stability: true
+stable_cycles_required: 2
+log_level: INFO
+recognition:
+  keyword_extract_max_chars: 5000
+  keyword_extract_limit: 24
+  keyword_extract_include_phrases: true
+  infer_year_from_text: true
+learning:
+  enabled: true
+public_knowledge:
+  enabled: true
+  online_lookup_enabled: false
+  acronym_overrides: {}
+auto_file_highlight_window: forever

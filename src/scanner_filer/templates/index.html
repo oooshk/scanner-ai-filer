@@ -40,7 +40,7 @@
           <button type="button" id="close-help" class="setup-close">Close</button>
         </div>
 
-        <details class="setup-block" open>
+        <details class="setup-block">
           <summary>System Overview</summary>
           <div class="help-body">
             <p>This is the <strong>Home Document Ops Hub</strong> — a self-hosted PDF document pipeline running on a Raspberry Pi. It watches a scanner inbox folder, automatically OCRs, classifies, splits, and files every PDF that arrives.</p>
@@ -306,6 +306,17 @@
       </form>
     </section>
 
+    {% if q %}
+    <section class="search-results-wrap" id="search-results-wrap" data-query="{{ q }}" data-bucket="{{ bucket }}" data-sort-by="{{ sort_by }}" data-sort-dir="{{ sort_dir }}">
+      <div class="search-results-head">
+        <h2>All Search Matches</h2>
+        <small class="muted" id="search-results-summary">Loading full-index matches...</small>
+        <button type="button" id="search-results-load-more" class="tree-toggle-btn" hidden>Load More</button>
+      </div>
+      <div class="search-results-list" id="search-results-list"></div>
+    </section>
+    {% endif %}
+
     {% if setup_enabled %}
     <div id="setup-modal" class="setup-modal" hidden>
       <div class="setup-modal-backdrop" data-close-setup="1"></div>
@@ -316,7 +327,7 @@
         </div>
           <p class="muted">Use these sections to configure NAS storage, scanner shares, user inboxes, runtime/engine behavior, splitter tuning, security accounts, and AI filing behavior.</p>
 
-        <details class="setup-block" open>
+        <details class="setup-block">
           <summary>NAS Samba Setup</summary>
           <p class="muted">This connects the Pi to your NAS. The NAS Share Name is the remote shared folder on the NAS (often "Public"). The Subdirectory is your filing folder inside that share (for example "Home Filing").</p>
           <form method="post" action="/setup/nas" class="setup-form">
@@ -599,6 +610,7 @@
             <input type="number" min="1" max="10" step="1" name="stable_cycles_required" value="{{ setup_defaults.stable_cycles_required }}" placeholder="Stable cycles required">
             <label class="checkline"><input type="checkbox" name="ocr_enabled" {% if setup_defaults.ocr_enabled %}checked{% endif %}> Enable OCR engine</label>
             <label class="checkline"><input type="checkbox" name="llm_enabled" {% if setup_defaults.llm_enabled %}checked{% endif %}> Enable LLM classifier</label>
+            <label class="checkline"><input type="checkbox" name="hover_preview_enabled" {% if setup_defaults.hover_preview_enabled %}checked{% endif %}> Enable hover preview on Open button</label>
             <label class="checkline"><input type="checkbox" name="llm_retry_on_failure_enabled" {% if setup_defaults.llm_retry_on_failure_enabled %}checked{% endif %}> Retry weak/failed classifications with a second LLM pass</label>
             <input type="number" min="30" max="1200" step="5" name="llm_timeout_seconds" value="{{ setup_defaults.llm_timeout_seconds }}" placeholder="LLM timeout (seconds)">
             <input type="number" min="600" max="20000" step="100" name="llm_max_input_chars" value="{{ setup_defaults.llm_max_input_chars }}" placeholder="LLM max input chars">
@@ -893,7 +905,7 @@
           <li>
             {% if n.is_file %}
               <span class="tree-file-name">{{ n.name }}</span> <a class="tree-file doc-open-link" href="{{ url_for('open_document', bucket=n.bucket, rel_path=n.rel_path) }}" target="_blank" rel="noopener" title="Open {{ n.rel_path }}">&#128196; Open</a>
-              <a class="tree-find-doc" href="#" data-rel-path="{{ n.rel_path }}" title="Locate in document list" aria-label="Locate in document list">&#128269;</a>
+              <a class="tree-find-doc" href="#" data-rel-path="{{ n.rel_path }}" data-bucket="{{ n.bucket }}" title="Locate in document list" aria-label="Locate in document list">&#128269;</a>
             {% else %}
               <details class="tree-node">
                 <summary>{{ n.name }}</summary>
@@ -928,9 +940,9 @@
             <button type="button" id="docs-collapse-all" class="tree-toggle-btn">Collapse All Details</button>
             <label class="refresh-control">View refresh
               <select id="view-refresh-interval">
-                <option value="0">off</option>
+                <option value="0" selected>off</option>
                 <option value="5000">5s</option>
-                <option value="10000" selected>10s</option>
+                <option value="10000">10s</option>
                 <option value="20000">20s</option>
                 <option value="30000">30s</option>
               </select>
@@ -1018,7 +1030,7 @@
         </thead>
         <tbody>
           {% for d in documents %}
-          <tr class="doc-row {% if d.auto_filed_recent %}doc-row-autofile{% endif %}" data-row-id="{{ loop.index0 }}" data-rel-path="{{ d.rel_path }}" onclick="toggleRowById(event, '{{ loop.index0 }}')" role="button" tabindex="0" onkeydown="toggleRowByKey(event, '{{ loop.index0 }}')">
+          <tr class="doc-row {% if d.auto_filed_recent %}doc-row-autofile{% endif %}" data-row-id="{{ loop.index0 }}" data-rel-path="{{ d.rel_path }}" data-bucket="{{ d.bucket }}" onclick="toggleRowById(event, '{{ loop.index0 }}')" role="button" tabindex="0" onkeydown="toggleRowByKey(event, '{{ loop.index0 }}')">
             <td>
               <input type="checkbox" class="doc-select" data-inbox-user="{{ d.inbox_user }}" name="selected" value="{{ d.bucket }}|{{ d.rel_path }}" form="bulk-move-form">
             </td>
@@ -1176,6 +1188,8 @@
 
   <script>
     const requestedFocusRel = {{ focus_rel|tojson }};
+    const requestedFocusBucket = {{ focus_bucket|tojson }};
+    const hoverPreviewEnabled = {{ 1 if setup_defaults.hover_preview_enabled else 0 }} === 1;
     let autoRefreshTimer = null;
     let docsTreeRefreshTimer = null;
     let queueWasActive = false;
@@ -1458,10 +1472,10 @@
         clearInterval(docsTreeRefreshTimer);
         docsTreeRefreshTimer = null;
       }
-      let ms = 10000;
+      let ms = 0;
       try {
         const raw = sessionStorage.getItem(viewRefreshMsKey);
-        const parsed = raw ? Number(raw) : 10000;
+        const parsed = raw ? Number(raw) : 0;
         if ([0, 5000, 10000, 20000, 30000].includes(parsed)) {
           ms = parsed;
         }
@@ -1494,6 +1508,85 @@
     scheduleDocsTreeRefresh();
     refreshQueueOnly();
     refreshLlmJsonHealthOnly();
+
+    async function loadFullSearchMatches() {
+      const wrap = document.getElementById('search-results-wrap');
+      const summary = document.getElementById('search-results-summary');
+      const list = document.getElementById('search-results-list');
+      const loadMore = document.getElementById('search-results-load-more');
+      if (!wrap || !summary || !list || !loadMore) return;
+
+      const query = String(wrap.dataset.query || '').trim();
+      if (!query) {
+        summary.textContent = 'Enter a search query to load full-index matches.';
+        return;
+      }
+
+      const params = new URLSearchParams({
+        q: query,
+        bucket: String(wrap.dataset.bucket || 'all').trim() || 'all',
+        sort_by: String(wrap.dataset.sortBy || 'processed').trim() || 'processed',
+        sort_dir: String(wrap.dataset.sortDir || 'desc').trim() || 'desc',
+      });
+
+      try {
+        const resp = await fetch(`/api/search?${params.toString()}`, { cache: 'no-store' });
+        if (!resp.ok) {
+          summary.textContent = `Full-index search failed (${resp.status}).`;
+          return;
+        }
+
+        const data = await resp.json();
+        const rows = Array.isArray(data.rows) ? data.rows : [];
+        const total = Number(data.total || rows.length);
+        const batchSize = 200;
+        let cursor = 0;
+
+        function renderBatch() {
+          const end = Math.min(rows.length, cursor + batchSize);
+          let html = '';
+          for (let i = cursor; i < end; i++) {
+            const row = rows[i] || {};
+            const rowBucket = String(row.bucket || 'archive');
+            const rowRel = String(row.rel_path || '');
+            const openHref = `/open?bucket=${encodeURIComponent(rowBucket)}&rel_path=${encodeURIComponent(rowRel)}`;
+            const locateUrl = new URL(window.location.href);
+            locateUrl.searchParams.set('focus_rel', rowRel);
+            locateUrl.searchParams.set('focus_bucket', rowBucket);
+            locateUrl.searchParams.set('page', '1');
+
+            html += `<div class="search-result-row">`;
+            html += `<div class="search-result-meta">`;
+            html += `<span class="chip chip-${escapeHtml(rowBucket)}">${escapeHtml(rowBucket)}</span>`;
+            html += `<span class="search-result-name" title="${escapeHtml(rowRel)}">${escapeHtml(rowRel)}</span>`;
+            html += `</div>`;
+            html += `<a class="search-result-open" href="${escapeHtml(openHref)}" target="_blank" rel="noopener">Open</a>`;
+            html += `<a class="search-result-locate" href="${escapeHtml(locateUrl.toString())}">Locate</a>`;
+            html += `</div>`;
+          }
+          list.insertAdjacentHTML('beforeend', html);
+          cursor = end;
+
+          const shown = cursor;
+          summary.textContent = `Full-index search: ${total} match(es). Showing ${shown}${shown < total ? ` of ${total}` : ''}.`;
+          loadMore.hidden = cursor >= rows.length;
+        }
+
+        list.innerHTML = '';
+        if (!rows.length) {
+          summary.textContent = 'Full-index search: 0 matches.';
+          loadMore.hidden = true;
+          return;
+        }
+
+        loadMore.onclick = () => renderBatch();
+        renderBatch();
+      } catch (_err) {
+        summary.textContent = 'Full-index search failed due to network or server error.';
+      }
+    }
+
+    loadFullSearchMatches();
 
     const searchForm = document.getElementById('search-form');
     const sortByHidden = document.getElementById('sort-by-hidden');
@@ -1541,7 +1634,7 @@
     if (viewRefreshControl) {
       viewRefreshControl.addEventListener('change', () => {
         try {
-          sessionStorage.setItem(viewRefreshMsKey, String(viewRefreshControl.value || '10000'));
+          sessionStorage.setItem(viewRefreshMsKey, String(viewRefreshControl.value || '0'));
         } catch (_err) {
         }
         scheduleDocsTreeRefresh();
@@ -1572,6 +1665,7 @@
     let lastPreviewUrl = '';
 
     function canShowHoverPreview() {
+      if (!hoverPreviewEnabled) return false;
       try {
         return window.matchMedia('(hover: hover)').matches;
       } catch (_err) {
@@ -1602,7 +1696,16 @@
       if (!previewPanel || !previewFrame || !linkEl || !canShowHoverPreview()) return;
       const rawUrl = String(linkEl.getAttribute('href') || '').trim();
       if (!rawUrl) return;
-      const previewUrl = rawUrl.includes('#') ? rawUrl : `${rawUrl}#toolbar=0&navpanes=0&scrollbar=0`;
+      let previewUrl = rawUrl;
+      try {
+        const u = new URL(rawUrl, window.location.href);
+        u.searchParams.set('embed', '1');
+        u.hash = 'toolbar=0&navpanes=0&scrollbar=0';
+        previewUrl = u.toString();
+      } catch (_err) {
+        previewUrl = rawUrl.includes('?') ? `${rawUrl}&embed=1` : `${rawUrl}?embed=1`;
+        previewUrl = previewUrl.includes('#') ? previewUrl : `${previewUrl}#toolbar=0&navpanes=0&scrollbar=0`;
+      }
       if (previewUrl !== lastPreviewUrl) {
         previewFrame.src = previewUrl;
         lastPreviewUrl = previewUrl;
@@ -1800,11 +1903,8 @@
 
     const docsUiState = loadDocsUiState();
     if (documentsTableWrap) {
-      if (typeof docsUiState.filesListOpen === 'boolean') {
-        documentsTableWrap.hidden = !docsUiState.filesListOpen;
-      } else {
-        documentsTableWrap.hidden = true;
-      }
+      // Always start with the file list visible on page load.
+      documentsTableWrap.hidden = false;
     }
 
     if (Array.isArray(docsUiState.expandedRelPaths) && docsUiState.expandedRelPaths.length > 0) {
@@ -1877,9 +1977,16 @@
       treeFilter.addEventListener('input', applyTreeFilter);
     }
 
-    function focusDocumentRow(relPath) {
+    function focusDocumentRow(relPath, bucket = '') {
       if (!relPath) return false;
-      const row = Array.from(document.querySelectorAll('.doc-row')).find((r) => String(r.dataset.relPath || '') === String(relPath));
+      const targetRel = String(relPath);
+      const targetBucket = String(bucket || '');
+      const row = Array.from(document.querySelectorAll('.doc-row')).find((r) => {
+        const relMatches = String(r.dataset.relPath || '') === targetRel;
+        if (!relMatches) return false;
+        if (!targetBucket) return true;
+        return String(r.dataset.bucket || '') === targetBucket;
+      });
       if (!row) return false;
       const docsWrap = document.getElementById('documents-table-wrap');
       if (docsWrap && docsWrap.hidden) docsWrap.hidden = false;
@@ -1900,11 +2007,17 @@
         e.preventDefault();
         e.stopPropagation();
         const relPath = link.dataset.relPath;
+        const bucket = String(link.dataset.bucket || '');
         if (!relPath) return;
-        if (focusDocumentRow(relPath)) return;
+        if (focusDocumentRow(relPath, bucket)) return;
 
         const url = new URL(window.location.href);
         url.searchParams.set('focus_rel', relPath);
+        if (bucket) {
+          url.searchParams.set('focus_bucket', bucket);
+        } else {
+          url.searchParams.delete('focus_bucket');
+        }
         url.searchParams.set('page', '1');
         saveDocsUiState();
         window.location.assign(url.toString());
@@ -1913,10 +2026,11 @@
 
     if (requestedFocusRel) {
       setTimeout(() => {
-        const focused = focusDocumentRow(requestedFocusRel);
+        const focused = focusDocumentRow(requestedFocusRel, requestedFocusBucket);
         if (!focused) return;
         const cleanUrl = new URL(window.location.href);
         cleanUrl.searchParams.delete('focus_rel');
+        cleanUrl.searchParams.delete('focus_bucket');
         window.history.replaceState({}, '', cleanUrl.toString());
       }, 0);
     }

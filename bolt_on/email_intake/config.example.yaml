@@ -1,0 +1,91 @@
+enabled: false
+poll_seconds: 300
+log_level: INFO
+
+web_ui:
+  enabled: true
+  host: 0.0.0.0
+  port: 8091
+
+output:
+  scanner_inbox_dir: /home/pi/scanner/inbox
+  state_dir: /home/pi/scanner/state/email_intake
+  entity_db_path: /home/pi/scanner/state/email_intake/entities.db
+  write_message_metadata: true
+  max_recent_events_export: 500
+
+attachment_handling:
+  save_pdf_to_scanner_inbox: true
+  save_non_pdf_to_state: false
+  allowed_extensions:
+    - .pdf
+    - .png
+    - .jpg
+    - .jpeg
+    - .tif
+    - .tiff
+
+entity_extraction:
+  enabled: true
+  detect_tracking: true
+  detect_policy_numbers: true
+  detect_status_keywords: true
+  known_shippers_only: true
+  policy_expiry_alert_days: 30
+  auto_remove_delivered_enabled: true
+  auto_remove_delivered_after_days: 7
+  tracking_terminal_statuses:
+    - delivered
+    - cancelled
+    - expired
+    - invalid_tracking
+  tracking_postcodes:
+    default: ""
+    royal_mail: ""
+    evri: ""
+    dpd: ""
+    parcelforce: ""
+    yodel: ""
+  additional_tracking_services:
+    - name: custom_shipper
+      hints: ["custom shipper"]
+      patterns: ["\\bCS[0-9]{10}\\b"]
+      tracking_url: "https://example.com/track/{tracking_number}?postcode={postcode}"
+      requires_postcode: true
+      known_service: true
+
+accounts:
+  - name: main_mailbox
+    enabled: false
+    host: imap.example.com
+    port: 993
+    use_ssl: true
+    # auth_mode: password | oauth2
+    auth_mode: password
+    username: user@example.com
+
+    # password mode (legacy/app-password):
+    password: CHANGE_ME_APP_PASSWORD
+
+    # oauth2 mode (modern):
+    # oauth2_provider: microsoft | google | custom
+    oauth2_provider: microsoft
+    # Leave blank to use provider defaults.
+    oauth2_token_url: ""
+    oauth2_scope: ""
+    oauth2_client_id: ""
+    oauth2_client_secret: ""
+    oauth2_refresh_token: ""
+    # Optional bootstrap token; service will refresh and persist tokens.
+    oauth2_access_token: ""
+    oauth2_access_token_expires_at: 0
+
+    # Scanner routing for this mailbox's PDF attachments.
+    # Leave target_inbox_user empty to use generic inbox.
+    target_inbox_user: ""
+    # Subfolder under scanner inbox (or scanner inbox/<user>/) to keep email files grouped.
+    target_subfolder: email
+
+    mailbox: INBOX
+    max_messages_per_poll: 50
+    mark_seen: false

@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Tracked Entities</title>
+  <style>
+    body { margin: 0; font-family: "IBM Plex Sans", "Segoe UI", sans-serif; background: #f5f8fb; color: #1f2a3d; }
+    main { max-width: 1200px; margin: 0 auto; padding: 16px; }
+    .card { background: #fff; border: 1px solid #d6e2ef; border-radius: 10px; padding: 14px; margin-bottom: 14px; }
+    h1, h2 { margin: 0 0 8px; }
+    .muted { color: #5f6b80; font-size: 13px; }
+    .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+    form { margin: 0; }
+    input, select, button { font: inherit; }
+    input, select { border: 1px solid #ccd9e8; border-radius: 8px; padding: 8px; }
+    button { border: 0; border-radius: 8px; padding: 8px 12px; background: #1f6feb; color: #fff; cursor: pointer; }
+    .btn-link { display: inline-block; border: 0; border-radius: 8px; padding: 8px 12px; background: #1f6feb; color: #fff; text-decoration: none; }
+    .btn-link.secondary { background: #2f855a; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { border-bottom: 1px solid #e6edf5; text-align: left; padding: 7px; font-size: 13px; vertical-align: top; }
+    code { background: #eef3f8; border-radius: 6px; padding: 2px 5px; }
+    details { max-width: 540px; }
+    pre { margin: 6px 0 0; white-space: pre-wrap; word-break: break-word; font-size: 12px; }
+    a.link { color: #1f6feb; text-decoration: none; }
+    .sort-note { font-size: 12px; color: #5f6b80; }
+  </style>
+</head>
+<body>
+  <main>
+    <section class="card">
+      <h1>Tracked Entities</h1>
+      <p class="muted">View the entities learned from email content, including policy numbers and shipment tracking references.</p>
+      {% if request.args.get('msg', '') %}
+      <p class="muted"><strong>{{ request.args.get('msg') }}</strong></p>
+      {% endif %}
+      <div class="row">
+        <a class="btn-link" href="/">Back to Email Intake</a>
+        <a class="btn-link secondary" href="/monitoring" style="background:#5b6f1f;">Shipment &amp; Policy Monitoring</a>
+        <a class="btn-link secondary" href="/info">Tracking &amp; Storage Info</a>
+        <form method="post" action="/logout">
+          <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+          <button type="submit" style="background:#4b5568;">Sign Out{% if auth_user %} ({{ auth_user }}){% endif %}</button>
+        </form>
+      </div>
+      <form method="get" action="/entities" class="row" style="margin-top:8px;">
+        <select name="type">
+          <option value="" {% if not entity_type %}selected{% endif %}>All entity types</option>
+          <option value="shipment" {% if entity_type == 'shipment' %}selected{% endif %}>Shipment</option>
+          <option value="policy" {% if entity_type == 'policy' %}selected{% endif %}>Policy</option>
+        </select>
+        <input type="number" min="1" max="2000" step="1" name="limit" value="{{ limit }}" placeholder="Limit">
+        <button type="submit">Apply Filter</button>
+      </form>
+    </section>
+
+    <section class="card">
+      <h2>Current Entities ({{ current_count }})</h2>
+      <p class="sort-note">Sorted by {{ current_sort }} ({{ current_dir }})</p>
+      {% if current_rows %}
+      <table>
+        <thead>
+          <tr>
+            <th><a class="link" href="{{ current_sort_urls.entity_type }}">Type</a></th>
+            <th><a class="link" href="{{ current_sort_urls.entity_key }}">Key</a></th>
+            <th><a class="link" href="{{ current_sort_urls.sender }}">From</a></th>
+            <th><a class="link" href="{{ current_sort_urls.last_seen_at }}">Last Seen</a></th>
+            <th><a class="link" href="{{ current_sort_urls.version }}">Version</a></th>
+            <th>Actions</th>
+            <th>Payload</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in current_rows %}
+          <tr>
+            <td>{{ r.entity_type }}</td>
+            <td><code>{{ r.entity_key }}</code></td>
+            <td>{{ r.payload.get('sender', '') }}</td>
+            <td>{{ r.last_seen_at }}</td>
+            <td>{{ r.version }}</td>
+            <td>
+              {% if r.entity_type == 'shipment' and r.payload.get('tracking_url_ui') %}
+              <div style="margin-bottom:6px;">
+                <a class="link" href="{{ r.payload.get('tracking_url_ui') }}" target="_blank" rel="noopener">Track Parcel</a>
+              </div>
+              {% endif %}
+              <form method="post" action="/entities/untrack" onsubmit="return confirm('Untrack this entity?');">
+                <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+                <input type="hidden" name="entity_type" value="{{ r.entity_type }}">
+                <input type="hidden" name="entity_key" value="{{ r.entity_key }}">
+                <input type="hidden" name="filter_type" value="{{ entity_type }}">
+                <input type="hidden" name="limit" value="{{ limit }}">
+                <input type="hidden" name="current_sort" value="{{ current_sort }}">
+                <input type="hidden" name="current_dir" value="{{ current_dir }}">
+                <input type="hidden" name="events_sort" value="{{ events_sort }}">
+                <input type="hidden" name="events_dir" value="{{ events_dir }}">
+                <button type="submit" style="background:#b42318;">Untrack</button>
+              </form>
+            </td>
+            <td>
+              <details>
+                <summary>view payload</summary>
+                <pre>{{ r.payload | tojson(indent=2) }}</pre>
+              </details>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <p class="muted">No current entities found for this filter.</p>
+      {% endif %}
+    </section>
+
+    <section class="card">
+      <h2>Recent Entity Events ({{ events_count }})</h2>
+      <p class="sort-note">Sorted by {{ events_sort }} ({{ events_dir }})</p>
+      {% if event_rows %}
+      <table>
+        <thead>
+          <tr>
+            <th><a class="link" href="{{ events_sort_urls.event_time }}">When</a></th>
+            <th><a class="link" href="{{ events_sort_urls.entity_type }}">Type</a></th>
+            <th><a class="link" href="{{ events_sort_urls.entity_key }}">Key</a></th>
+            <th><a class="link" href="{{ events_sort_urls.sender }}">From</a></th>
+            <th><a class="link" href="{{ events_sort_urls.event_type }}">Event</a></th>
+            <th><a class="link" href="{{ events_sort_urls.source_ref }}">Source</a></th>
+            <th>Payload</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in event_rows %}
+          <tr>
+            <td>{{ r.event_time }}</td>
+            <td>{{ r.entity_type }}</td>
+            <td><code>{{ r.entity_key }}</code></td>
+            <td>{{ r.payload.get('sender', '') }}</td>
+            <td>{{ r.event_type }}</td>
+            <td>{{ r.source_ref }}</td>
+            <td>
+              <details>
+                <summary>view payload</summary>
+                <pre>{{ r.payload | tojson(indent=2) }}</pre>
+              </details>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <p class="muted">No recent entity events found for this filter.</p>
+      {% endif %}
+    </section>
+  </main>
+</body>
+</html>

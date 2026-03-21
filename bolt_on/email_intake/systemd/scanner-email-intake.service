@@ -1,0 +1,15 @@
+[Unit]
+Description=Scanner Email Intake Bolt-On
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/scanner
+ExecStart=/usr/bin/python3 /home/pi/scanner/bolt_on/email_intake/email_intake_service.py --config /home/pi/scanner/bolt_on/email_intake/config.yaml
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

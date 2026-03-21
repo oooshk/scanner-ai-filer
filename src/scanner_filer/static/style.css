@@ -316,6 +316,75 @@ body {
   width: 100%;
 }
 
+.search-results-wrap {
+  margin: 0 0 16px;
+  border: 1px solid var(--line);
+  background: var(--card);
+  border-radius: 12px;
+  padding: 10px;
+}
+
+.search-results-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.search-results-head h2 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.search-results-list {
+  border: 1px solid #d6e5e0;
+  border-radius: 8px;
+  max-height: 320px;
+  overflow: auto;
+}
+
+.search-result-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 8px;
+  align-items: center;
+  padding: 7px 9px;
+  border-bottom: 1px solid #e8f0ec;
+}
+
+.search-result-row:last-child {
+  border-bottom: 0;
+}
+
+.search-result-meta {
+  min-width: 0;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.search-result-name {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.search-result-open,
+.search-result-locate {
+  font-size: 12px;
+  text-decoration: none;
+  color: #1458a6;
+}
+
+.search-result-open:hover,
+.search-result-locate:hover {
+  text-decoration: underline;
+}
+
 input, select, button {
   border: 1px solid var(--line);
   padding: 9px 10px;

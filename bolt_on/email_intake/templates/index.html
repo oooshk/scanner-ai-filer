@@ -1,0 +1,400 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Email Intake Bolt-On</title>
+  <style>
+    body { margin: 0; font-family: "IBM Plex Sans", "Segoe UI", sans-serif; background: #f5f8fb; color: #1f2a3d; }
+    main { max-width: 1100px; margin: 0 auto; padding: 16px; }
+    .card { background: #fff; border: 1px solid #d6e2ef; border-radius: 10px; padding: 12px; margin-bottom: 14px; }
+    .section-wrap { padding: 8px; }
+    .section-block { border: 1px solid #d7e6e1; border-radius: 10px; padding: 8px; }
+    .section-block > summary { cursor: pointer; font-weight: 600; font-size: 17px; }
+    .section-body { margin-top: 10px; }
+    h1 { margin: 0 0 8px; }
+    h2 { margin: 0 0 8px; font-size: 18px; }
+    .msg { padding: 8px 10px; border-radius: 8px; background: #eef7ff; border: 1px solid #bfd6f2; margin-bottom: 12px; }
+    .muted { color: #5f6b80; font-size: 13px; }
+    .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+    select, button, textarea, input { font: inherit; }
+    textarea { width: 100%; min-height: 340px; border: 1px solid #ccd9e8; border-radius: 8px; padding: 10px; font-family: "IBM Plex Mono", monospace; font-size: 12px; }
+    input, select, textarea { min-height: 42px; border: 1px solid #ccd9e8; border-radius: 8px; padding: 9px 10px; }
+    button { border: 0; border-radius: 8px; padding: 8px 12px; background: #1f6feb; color: #fff; cursor: pointer; }
+    button.secondary { background: #4b5568; }
+    .btn-link { display: inline-block; border: 0; border-radius: 8px; padding: 8px 12px; background: #2f855a; color: #fff; text-decoration: none; }
+    .btn-link.alt { background: #1f6feb; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { border-bottom: 1px solid #e6edf5; text-align: left; padding: 7px; font-size: 13px; }
+    code { background: #eef3f8; border-radius: 6px; padding: 2px 5px; }
+    .section-tools { justify-content: flex-end; margin-top: 10px; }
+    .field-grid { display: grid; grid-template-columns: repeat(3, minmax(180px, 1fr)); gap: 12px; }
+    .field-grid.two { grid-template-columns: repeat(2, minmax(220px, 1fr)); }
+    .field-span-2 { grid-column: span 2; }
+    .field-span-3 { grid-column: span 3; }
+    .field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+    .field label { font-size: 12px; color: #41506a; font-weight: 600; }
+    .check-row { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; }
+    .checkline { display: inline-flex; gap: 8px; align-items: center; font-size: 14px; color: #2f3d56; }
+    .checkline input[type="checkbox"] { min-height: 0; padding: 0; width: 16px; height: 16px; }
+    .actions-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 8px; }
+    @media (max-width: 980px) {
+      .field-grid, .field-grid.two { grid-template-columns: 1fr; }
+      .field-span-2, .field-span-3 { grid-column: span 1; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <section class="card">
+      <h1>Email Intake Bolt-On</h1>
+      <p class="muted">Standalone module. Core scanner filing remains independent.</p>
+      {% if message %}<div class="msg">{{ message }}</div>{% endif %}
+      <div class="row">
+        <form method="post" action="/run-once">
+          <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+          <button type="submit">Run Poll Now</button>
+        </form>
+        <a href="/monitoring" class="btn-link alt">Shipment &amp; Policy Monitoring</a>
+        <a href="/info" class="btn-link">Email Tracking &amp; Storage Info</a>
+        <a href="/entities" class="btn-link alt">Tracked Entities</a>
+        <form method="post" action="/logout">
+          <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+          <button type="submit" class="secondary">Sign Out{% if auth_user %} ({{ auth_user }}){% endif %}</button>
+        </form>
+      </div>
+      {% if run_once_last_at %}
+      <p class="muted">Last manual poll: <code>{{ run_once_last_at }}</code> - {{ run_once_last_status }}{% if run_once_last_detail %} ({{ run_once_last_detail }}){% endif %}</p>
+      {% else %}
+      <p class="muted">Run Poll Now is reusable and can be used any time to force an immediate mailbox check.</p>
+      {% endif %}
+      <p class="muted">Config path: <code>{{ config_path }}</code></p>
+      <p class="muted">State dir: <code>{{ state_dir }}</code> | DB: <code>{{ db_path }}</code></p>
+      <div class="row section-tools">
+        <button type="button" id="expand-all" class="secondary">Expand All Sections</button>
+        <button type="button" id="collapse-all" class="secondary">Collapse All Sections</button>
+      </div>
+    </section>
+
+    <section class="card section-wrap">
+      <details class="section-block">
+      <summary>Service Settings</summary>
+      <div class="section-body">
+      <form method="post" action="/settings/save">
+        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+        <div class="check-row">
+          <label class="checkline"><input type="checkbox" name="enabled" {% if settings.enabled %}checked{% endif %}> Enable email intake service</label>
+          <label class="checkline"><input type="checkbox" name="write_message_metadata" {% if settings.write_message_metadata %}checked{% endif %}> Write message metadata files</label>
+        </div>
+        <div class="field-grid" style="margin-top:10px;">
+          <div class="field">
+            <label>Poll Interval (seconds)</label>
+            <input type="number" name="poll_seconds" min="10" max="3600" step="1" value="{{ settings.poll_seconds }}">
+          </div>
+          <div class="field">
+            <label>Recent Events Export Limit</label>
+            <input type="number" name="max_recent_events_export" min="50" max="5000" step="10" value="{{ settings.max_recent_events_export }}">
+          </div>
+          <div class="field">
+            <label>Log Level</label>
+            <select name="log_level">
+            <option value="DEBUG" {% if settings.log_level == 'DEBUG' %}selected{% endif %}>DEBUG</option>
+            <option value="INFO" {% if settings.log_level == 'INFO' %}selected{% endif %}>INFO</option>
+            <option value="WARNING" {% if settings.log_level == 'WARNING' %}selected{% endif %}>WARNING</option>
+            <option value="ERROR" {% if settings.log_level == 'ERROR' %}selected{% endif %}>ERROR</option>
+            </select>
+          </div>
+          <div class="field field-span-2">
+            <label>Scanner Inbox Directory</label>
+            <input type="text" name="scanner_inbox_dir" value="{{ settings.scanner_inbox_dir }}">
+          </div>
+          <div class="field">
+            <label>State Directory</label>
+            <input type="text" name="state_dir" value="{{ settings.state_dir }}">
+          </div>
+          <div class="field field-span-2">
+            <label>Entity DB Path</label>
+            <input type="text" name="entity_db_path" value="{{ settings.entity_db_path }}">
+          </div>
+          <div class="field">
+            <label>Allowed Extensions (CSV)</label>
+            <input type="text" name="allowed_extensions_csv" value="{{ settings.allowed_extensions_csv }}">
+          </div>
+        </div>
+        <div class="check-row" style="margin-top:10px;">
+          <label class="checkline"><input type="checkbox" name="save_pdf_to_scanner_inbox" {% if settings.save_pdf_to_scanner_inbox %}checked{% endif %}> Save PDF attachments to scanner inbox</label>
+          <label class="checkline"><input type="checkbox" name="save_non_pdf_to_state" {% if settings.save_non_pdf_to_state %}checked{% endif %}> Save non-PDF attachments to state</label>
+        </div>
+        <div class="check-row" style="margin-top:10px;">
+          <label class="checkline"><input type="checkbox" name="entity_enabled" {% if settings.entity_enabled %}checked{% endif %}> Enable entity extraction</label>
+          <label class="checkline"><input type="checkbox" name="detect_tracking" {% if settings.detect_tracking %}checked{% endif %}> Detect tracking numbers</label>
+          <label class="checkline"><input type="checkbox" name="detect_policy_numbers" {% if settings.detect_policy_numbers %}checked{% endif %}> Detect policy numbers</label>
+          <label class="checkline"><input type="checkbox" name="detect_status_keywords" {% if settings.detect_status_keywords %}checked{% endif %}> Detect status keywords</label>
+          <label class="checkline"><input type="checkbox" name="known_shippers_only" {% if settings.known_shippers_only %}checked{% endif %}> Track known shippers only</label>
+        </div>
+        <div class="field-grid" style="margin-top:10px;">
+          <div class="field">
+            <label>Policy Expiry Alert Days</label>
+            <input type="number" name="policy_expiry_alert_days" min="1" max="365" step="1" value="{{ settings.policy_expiry_alert_days }}">
+          </div>
+          <div class="field">
+            <label>Auto-remove Delivered After (days)</label>
+            <input type="number" name="auto_remove_delivered_after_days" min="1" max="180" step="1" value="{{ settings.auto_remove_delivered_after_days }}">
+          </div>
+          <div class="field field-span-2">
+            <label>Terminal Tracking Statuses (CSV)</label>
+            <input type="text" name="tracking_terminal_statuses_csv" value="{{ settings.tracking_terminal_statuses_csv }}">
+          </div>
+          <div class="field field-span-3">
+            <label>Carrier Postcodes (JSON object; include default and carrier keys)</label>
+            <textarea name="tracking_postcodes_json" style="min-height:130px;">{{ settings.tracking_postcodes_json }}</textarea>
+          </div>
+          <div class="field field-span-3">
+            <label>Additional Tracking Services (JSON array)</label>
+            <textarea name="additional_tracking_services_json" style="min-height:170px;">{{ settings.additional_tracking_services_json }}</textarea>
+          </div>
+        </div>
+        <div class="check-row" style="margin-top:10px;">
+          <label class="checkline"><input type="checkbox" name="auto_remove_delivered_enabled" {% if settings.auto_remove_delivered_enabled %}checked{% endif %}> Auto-remove delivered shipments after retention period</label>
+        </div>
+        <div class="actions-row">
+          <button type="submit">Save Service Settings</button>
+        </div>
+      </form>
+      </div>
+      </details>
+    </section>
+
+    <section class="card section-wrap">
+      <details class="section-block">
+      <summary>Quick Connect Outlook</summary>
+      <div class="section-body">
+      {% if quick_ms_available %}
+      <p class="muted">Sign in once with Microsoft and this will auto-create a mailbox entry with IMAP defaults and OAuth tokens.</p>
+      <form method="post" action="/oauth2/quick/microsoft">
+        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+        <div class="field-grid two">
+          <div class="field">
+            <label>Mailbox Name (optional)</label>
+            <input type="text" name="quick_name" placeholder="e.g. personal_outlook">
+          </div>
+          <div class="field">
+            <label>Microsoft Email (optional login hint)</label>
+            <input type="text" name="quick_email" placeholder="name@outlook.com">
+          </div>
+          <div class="field">
+            <label>Route To Scanner Inbox User</label>
+            <select name="quick_target_inbox_user">
+          <option value="">Route to generic scanner inbox</option>
+          {% for u in scanner_inbox_users %}
+          <option value="{{ u }}">Route to user inbox: {{ u }}</option>
+          {% endfor %}
+            </select>
+          </div>
+          <div class="field">
+            <label>Scanner Subfolder</label>
+            <input type="text" name="quick_target_subfolder" value="email">
+          </div>
+        </div>
+        <div class="actions-row">
+          <button type="submit">Sign in with Microsoft</button>
+        </div>
+      </form>
+      {% else %}
+      <p class="muted">Quick connect is not configured on this server yet. Set environment variable SCANNER_EMAIL_MS_CLIENT_ID (and optional SCANNER_EMAIL_MS_CLIENT_SECRET) for the web UI process.</p>
+      {% endif %}
+      </div>
+      </details>
+    </section>
+
+    <section class="card section-wrap">
+      <details class="section-block">
+      <summary>Accounts</summary>
+      <div class="section-body">
+      {% if accounts %}
+      <table>
+        <thead><tr><th>Name</th><th>Enabled</th><th>Auth</th><th>Host</th><th>Mailbox</th><th>Username</th><th>Actions</th></tr></thead>
+        <tbody>
+          {% for a in accounts %}
+          <tr>
+            <td>{{ a.name }}</td>
+            <td>{{ 'yes' if a.enabled else 'no' }}</td>
+            <td>{{ a.auth_mode }}</td>
+            <td>{{ a.host }}</td>
+            <td>{{ a.mailbox }}</td>
+            <td>{{ a.username }}</td>
+            <td>
+              <div class="row">
+                <a href="/?edit={{ a.name }}">Edit</a>
+                <form method="post" action="/account/test">
+                  <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+                  <input type="hidden" name="account_name" value="{{ a.name }}">
+                  <button type="submit" class="secondary">Test</button>
+                </form>
+                <form method="post" action="/account/delete" onsubmit="return confirm('Delete this account?');">
+                  <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+                  <input type="hidden" name="name" value="{{ a.name }}">
+                  <button type="submit" class="secondary">Delete</button>
+                </form>
+              </div>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <p class="muted">No accounts configured yet.</p>
+      {% endif %}
+      </div>
+      </details>
+    </section>
+
+    <section class="card section-wrap">
+      <details class="section-block">
+      <summary>Mailbox Editor</summary>
+      <div class="section-body">
+      {% set ea = edit_account or {} %}
+      <form method="post" action="/account/save">
+        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+        <input type="hidden" name="current_name" value="{{ ea.name or '' }}">
+        <div class="field-grid">
+          <div class="field">
+            <label>Mailbox Name</label>
+            <input type="text" name="name" value="{{ ea.name or '' }}" placeholder="unique id">
+          </div>
+          <div class="field">
+            <label>IMAP Host</label>
+            <input type="text" name="host" value="{{ ea.host or '' }}" placeholder="imap-mail.outlook.com">
+          </div>
+          <div class="field">
+            <label>Port</label>
+            <input type="number" name="port" min="1" max="65535" value="{{ ea.port or 993 }}">
+          </div>
+          <div class="field">
+            <label>Mailbox Folder</label>
+            <input type="text" name="mailbox" value="{{ ea.mailbox or 'INBOX' }}">
+          </div>
+          <div class="field">
+            <label>Max Messages Per Poll</label>
+            <input type="number" name="max_messages_per_poll" min="1" max="500" value="{{ ea.max_messages_per_poll or 50 }}">
+          </div>
+          <div class="field field-span-3">
+            <label>Mailbox Username</label>
+            <input type="text" name="username" value="{{ ea.username or '' }}" placeholder="name@domain.com">
+          </div>
+          <div class="field">
+            <label>Auth Mode</label>
+            <select name="auth_mode">
+              {% set mode = ea.auth_mode or 'password' %}
+              <option value="password" {% if mode == 'password' %}selected{% endif %}>Password / App Password</option>
+              <option value="oauth2" {% if mode == 'oauth2' %}selected{% endif %}>OAuth2 (XOAUTH2)</option>
+            </select>
+          </div>
+          <div class="field field-span-2">
+            <label>Password (only for password mode)</label>
+            <input type="text" name="password" value="" placeholder="leave blank to keep existing">
+          </div>
+          <div class="field">
+            <label>OAuth Provider</label>
+            <select name="oauth2_provider">
+              {% set provider = ea.oauth2_provider or '' %}
+              <option value="" {% if provider == '' %}selected{% endif %}>custom/none</option>
+              <option value="microsoft" {% if provider == 'microsoft' %}selected{% endif %}>Microsoft 365</option>
+              <option value="google" {% if provider == 'google' %}selected{% endif %}>Google</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>OAuth Client ID</label>
+            <input type="text" name="oauth2_client_id" value="{{ ea.oauth2_client_id or '' }}">
+          </div>
+          <div class="field">
+            <label>OAuth Client Secret</label>
+            <input type="text" name="oauth2_client_secret" value="{{ ea.oauth2_client_secret or '' }}">
+          </div>
+          <div class="field field-span-2">
+            <label>OAuth Refresh Token</label>
+            <input type="text" name="oauth2_refresh_token" value="{{ ea.oauth2_refresh_token or '' }}">
+          </div>
+          <div class="field">
+            <label>Access Token Expires At (epoch)</label>
+            <input type="number" name="oauth2_access_token_expires_at" value="{{ ea.oauth2_access_token_expires_at or 0 }}">
+          </div>
+          <div class="field field-span-2">
+            <label>OAuth Token URL (optional override)</label>
+            <input type="text" name="oauth2_token_url" value="{{ ea.oauth2_token_url or '' }}">
+          </div>
+          <div class="field">
+            <label>OAuth Scope (optional override)</label>
+            <input type="text" name="oauth2_scope" value="{{ ea.oauth2_scope or '' }}">
+          </div>
+          <div class="field field-span-3">
+            <label>OAuth Access Token (optional bootstrap)</label>
+            <input type="text" name="oauth2_access_token" value="{{ ea.oauth2_access_token or '' }}">
+          </div>
+          <div class="field">
+            <label>Route To Scanner Inbox User</label>
+            <select name="target_inbox_user">
+              <option value="" {% if not ea.target_inbox_user %}selected{% endif %}>generic scanner inbox</option>
+              {% for u in scanner_inbox_users %}
+              <option value="{{ u }}" {% if ea.target_inbox_user == u %}selected{% endif %}>{{ u }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="field field-span-2">
+            <label>Scanner Subfolder</label>
+            <input type="text" name="target_subfolder" value="{{ ea.target_subfolder or 'email' }}">
+          </div>
+        </div>
+        <div class="check-row" style="margin-top:10px;">
+          <label class="checkline"><input type="checkbox" name="enabled" {% if ea.enabled %}checked{% endif %}> Enabled</label>
+          <label class="checkline"><input type="checkbox" name="use_ssl" {% if ea.use_ssl is not defined or ea.use_ssl %}checked{% endif %}> SSL</label>
+          <label class="checkline"><input type="checkbox" name="mark_seen" {% if ea.mark_seen %}checked{% endif %}> Mark seen</label>
+        </div>
+        <div class="actions-row">
+          <button type="submit" name="submit_action" value="save">Save Mailbox</button>
+          {% if ea.name %}
+          <button type="submit" name="submit_action" value="oauth_microsoft" class="secondary">Sign in with Microsoft</button>
+          <button type="submit" name="submit_action" value="oauth_google" class="secondary">Sign in with Google</button>
+          {% endif %}
+        </div>
+      </form>
+      {% if not ea.name %}
+      <p class="muted">Save the mailbox first to enable Microsoft/Google OAuth sign-in buttons.</p>
+      {% endif %}
+      <p class="muted">Use auth mode OAuth2 for modern providers. You can also link each mailbox to a scanner user inbox and a dedicated subfolder such as <code>email</code>.</p>
+      </div>
+      </details>
+    </section>
+
+    <section class="card section-wrap">
+      <details class="section-block">
+      <summary>Advanced Configuration (YAML)</summary>
+      <div class="section-body">
+      <form method="post" action="/config/save">
+        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+        <div class="field">
+          <label>Raw YAML Configuration</label>
+        <textarea name="config_text">{{ config_text }}</textarea>
+        </div>
+        <div class="actions-row">
+          <button type="submit">Save YAML</button>
+        </div>
+      </form>
+      <p class="muted">API endpoints: <code>/api/health</code>, <code>/api/entities/current</code>, <code>/api/entities/events</code>, <code>/api/config</code></p>
+      </div>
+      </details>
+    </section>
+  </main>
+  <script>
+    const sectionDetails = Array.from(document.querySelectorAll('.section-block'));
+    const expandBtn = document.getElementById('expand-all');
+    const collapseBtn = document.getElementById('collapse-all');
+    if (expandBtn) {
+      expandBtn.addEventListener('click', () => sectionDetails.forEach((d) => { d.open = true; }));
+    }
+    if (collapseBtn) {
+      collapseBtn.addEventListener('click', () => sectionDetails.forEach((d) => { d.open = false; }));
+    }
+  </script>
+</body>
+</html>

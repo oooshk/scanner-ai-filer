@@ -7,7 +7,7 @@ CONFIG="$BASE_DIR/config.yaml"
 
 echo "[1/5] Installing apt dependencies"
 sudo apt-get update
-sudo apt-get install -y python3-venv python3-pip tesseract-ocr ocrmypdf poppler-utils cifs-utils samba samba-common-bin acl
+sudo apt-get install -y python3-venv python3-pip tesseract-ocr ocrmypdf poppler-utils cifs-utils samba samba-common-bin acl curl
 
 echo "[2/5] Creating virtualenv"
 python3 -m venv "$VENV_DIR"
