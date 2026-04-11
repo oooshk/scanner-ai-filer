@@ -5,6 +5,7 @@ import logging
 import re
 import shlex
 import subprocess
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import quote
@@ -724,6 +725,12 @@ def classify_text(
     )
 
     command_template = _select_command_template(llm_cfg)
+    started_monotonic = time.monotonic()
+    total_timeout_seconds = max(1, int(llm_cfg.timeout_seconds or 0))
+
+    def _remaining_timeout() -> int:
+        elapsed = max(0.0, time.monotonic() - started_monotonic)
+        return max(0, int(total_timeout_seconds - elapsed))
 
     def _decode_payload_from_streams(stdout_text: str | None, stderr_text: str | None) -> dict | None:
         stdout_text = stdout_text or ""
@@ -748,6 +755,11 @@ def classify_text(
         return None
 
     def _run_llm_once(prompt_text: str) -> subprocess.CompletedProcess[str] | None:
+        remaining_timeout = _remaining_timeout()
+        if remaining_timeout <= 0:
+            logger.warning("LLM classification budget exhausted before retry; using fallback")
+            return None
+
         try:
             if "{prompt}" in command_template:
                 args = shlex.split(command_template)
@@ -761,7 +773,7 @@ def classify_text(
                     replaced,
                     capture_output=True,
                     text=True,
-                    timeout=llm_cfg.timeout_seconds,
+                    timeout=remaining_timeout,
                 )
 
             args = shlex.split(command_template)
@@ -770,7 +782,7 @@ def classify_text(
                 input=prompt_text,
                 capture_output=True,
                 text=True,
-                timeout=llm_cfg.timeout_seconds,
+                timeout=remaining_timeout,
             )
         except subprocess.TimeoutExpired:
             return None

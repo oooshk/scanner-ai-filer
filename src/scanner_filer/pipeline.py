@@ -286,10 +286,12 @@ def process_one_file(src_pdf: Path, cfg: AppConfig, config_path: Path | None = N
                     "If still uncertain, keep unknown."
                 ).strip()
 
+                retry_timeout = max(90, min(int(cfg.llm.timeout_seconds or 0), 240))
                 retry_cfg = replace(
                     cfg.llm,
                     command_template=str(cfg.llm.retry_command_template).strip(),
                     fallback_command_template="",
+                    timeout_seconds=retry_timeout,
                     json_metrics_path=(cfg.paths.state / "llm_json_metrics_retry.json"),
                     classification_guidance=retry_guidance,
                 )
